@@ -1,0 +1,53 @@
+services:
+  source-db:
+    image: postgres@sha256:92620daddcd947f8d5ab5ba66e848702fe443d87fed30c4cea8e389fd78dfc55
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${SOURCE_POSTGRES_DB:?set SOURCE_POSTGRES_DB in .env}
+    volumes:
+      - source-postgres-data:/var/lib/postgresql/data
+      - ./demo/sql:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+
+  target-db:
+    image: postgres@sha256:92620daddcd947f8d5ab5ba66e848702fe443d87fed30c4cea8e389fd78dfc55
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${TARGET_POSTGRES_DB:?set TARGET_POSTGRES_DB in .env}
+    volumes:
+      - target-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+
+  sanitizer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      SOURCE_DATABASE_URL: ${SOURCE_DATABASE_URL:?set SOURCE_DATABASE_URL in .env}
+      TARGET_DATABASE_URL: ${TARGET_DATABASE_URL:?set TARGET_DATABASE_URL in .env}
+      SANITIZER_HMAC_KEY: ${SANITIZER_HMAC_KEY:?set SANITIZER_HMAC_KEY in .env}
+      OPENROUTER_BASE_URL: ${OPENROUTER_BASE_URL:?set OPENROUTER_BASE_URL in .env}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:?set OPENROUTER_API_KEY in .env}
+    volumes:
+      - ./.runs:/app/.runs
+    depends_on:
+      source-db:
+        condition: service_healthy
+      target-db:
+        condition: service_healthy
+
+volumes:
+  source-postgres-data:
+  target-postgres-data:

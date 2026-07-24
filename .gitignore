@@ -1,0 +1,29 @@
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# Runtime artifacts (contain sensitive mapping metadata)
+.runs/
+perf-results/
+
+# OS/editor/agent runtime
+.DS_Store
+.vscode/
+.idea/
+.pi/
