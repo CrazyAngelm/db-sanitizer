@@ -1,90 +1,90 @@
 # DB Sanitizer
 
-Контейнеризированный PoC санитизации PostgreSQL: Greenmask выполняет потоковый dump/restore, LangGraph оркестрирует job, SQLite хранит opaque mappings, а LLM генерирует только синтетический пул замен.
+Контейнеризированный демонстрационный прототип санитизации PostgreSQL: Greenmask выполняет потоковую выгрузку и восстановление, LangGraph оркестрирует задание, SQLite хранит непрозрачные сопоставления, а LLM генерирует только синтетический пул замен.
 
 ## Статус
 
-- Реализовано: source PostgreSQL по DSN → mapping registry → LLM batch generation → Greenmask Cmd JSONL mapping → dump/restore в target → required verification/report.
+- Реализован маршрут: исходный PostgreSQL по DSN → реестр сопоставлений → пакетная генерация LLM → JSONL-сопоставление Greenmask Cmd → выгрузка/восстановление в целевой PostgreSQL → обязательная верификация и отчёт.
 - Проверено на: Windows 11 10.0.26200, Intel64 Family 6 Model 170, Docker Desktop 28.3.0 / Compose 2.38.1.
 - Зафиксированные версии: PostgreSQL 16.14, Greenmask `v0.2.22`, Python 3.12.13, LangGraph 1.2.9, psycopg 3.3.4, Pydantic 2.13.4.
-- Runtime LLM: OpenRouter `deepseek/deepseek-v4-flash` со structured JSON output.
+- Рабочая LLM: OpenRouter `deepseek/deepseek-v4-flash` со структурированным JSON-выводом.
 
-> **Явное отклонение от исходного пакета.** По отдельному указанию заказчика локальная Ollama/qwen заменена на OpenRouter DeepSeek V4 Flash. Поэтому Compose не поднимает Ollama, а критерий AC-010 в его исходной формулировке («Ollama») не заявляется как пройденный. Raw PII по-прежнему не отправляются: провайдер получает только тип, locale, count и format constraints.
+> **Явное отклонение от исходного пакета.** По отдельному указанию заказчика локальная Ollama/qwen заменена на OpenRouter DeepSeek V4 Flash. Поэтому Compose не поднимает Ollama, а критерий AC-010 в его исходной формулировке («Ollama») не заявляется как пройденный. Исходные PII по-прежнему не отправляются: провайдер получает только тип, локаль, количество и ограничения формата.
 
 ## Задача и границы
 
-Инструмент создаёт пригодную для development/test/analytics копию PostgreSQL без значений в явно перечисленных чувствительных text/varchar/char колонках. Он сохраняет схему, surrogate PK/FK, строки, `NULL`, UNIQUE и cardinality.
+Инструмент создаёт пригодную для разработки, тестирования и аналитики копию PostgreSQL без значений в явно перечисленных чувствительных столбцах типов text/varchar/char. Он сохраняет схему, суррогатные PK/FK, строки, `NULL`, UNIQUE и кардинальность.
 
 ### Реализовано
 
-- PostgreSQL 16 only; source connection и отдельный target;
-- entity types: `person_name`, `email`, `phone`, `address`;
-- YAML consistency groups без auto-discovery PII;
-- normalisation + `HMAC-SHA256(group_id + "\\0" + normalized_value)`;
-- SQLite registry без raw source values;
-- OpenRouter structured-output adapter и explicit fake provider для test/perf;
-- Greenmask 0.2.22 `Cmd` transformer с long-lived Python JSONL mapper;
-- LangGraph SQLite checkpoints, `--resume`, fail-closed CLI;
-- schema/FK/rows/NULL/UNIQUE/mapping/intersection/diversity verification;
-- Docker Compose, demo seed, security tests и 100k-row performance smoke.
+- Только PostgreSQL 16; соединение с исходной БД и отдельная целевая БД.
+- Типы сущностей: `person_name`, `email`, `phone`, `address`.
+- YAML-группы консистентности без автоматического поиска PII.
+- Нормализация и `HMAC-SHA256(group_id + "\\0" + normalized_value)`.
+- Реестр SQLite без исходных значений.
+- Адаптер OpenRouter со структурированным выводом и явный тестовый провайдер для тестов и замера производительности.
+- Трансформер Greenmask 0.2.22 `Cmd` с долгоживущим Python JSONL-сопоставителем.
+- Контрольные точки LangGraph SQLite, `--resume`, CLI с закрытым отказом.
+- Верификация схемы, FK, строк, `NULL`, UNIQUE, сопоставлений, пересечений и разнообразия значений.
+- Docker Compose, демонстрационные данные, проверки безопасности и проверка производительности на 100 000 строк.
 
 ### Не реализовано
 
-MySQL/MSSQL, UI/API, Kubernetes, S3, auto PII discovery, NER/OCR/documents/free text, JSON/JSONB masking, subsetting, reversible encryption, cloud control plane, additional entity types и multi-agent workflows.
+MySQL/MSSQL, UI/API, Kubernetes, S3, автоматическое обнаружение PII, NER/OCR, документы и свободный текст, маскирование JSON/JSONB, подмножества данных, обратимое шифрование, облачная управляющая плоскость, дополнительные типы сущностей и мультиагентные сценарии.
 
 ## Архитектура
 
 ```mermaid
 flowchart TD
-    CLI[CLI / Make] --> LG[LangGraph StateGraph]
-    LG --> P[Policy + schema validator]
-    P --> C[Server-side distinct collector]
-    C --> R[(SQLite mapping registry)]
+    CLI[CLI / Make] --> LG[StateGraph LangGraph]
+    LG --> P[Политика и валидатор схемы]
+    P --> C[Серверный курсор для уникальных значений]
+    C --> R[(Реестр сопоставлений SQLite)]
     LG --> A[generate_replacements_agent]
     A --> OR[OpenRouter / DeepSeek V4 Flash]
     A --> R
-    LG --> G[Generated Greenmask config]
-    S[(Source PostgreSQL)] --> GM[Greenmask dump]
-    GM --> M[Long-lived Cmd JSONL mapper]
+    LG --> G[Сгенерированная конфигурация Greenmask]
+    S[(Исходный PostgreSQL)] --> GM[Выгрузка Greenmask]
+    GM --> M[Долгоживущий JSONL-сопоставитель Cmd]
     M --> R
-    GM --> D[(Sanitized logical dump)]
-    D --> T[(Target PostgreSQL)]
-    S --> V[Verifier]
+    GM --> D[(Санитизированная логическая выгрузка)]
+    D --> T[(Целевой PostgreSQL)]
+    S --> V[Верификатор]
     T --> V
     R --> V
     V --> REP[report.json / report.md]
 ```
 
-Control plane: policy validation, key collection, one LLM agent node, config creation and verification. Data plane: Greenmask streams PostgreSQL rows and asks the mapper only for an existing SQLite replacement; it never invokes an LLM per row.
+Управляющая плоскость включает валидацию политики, сбор ключей, один агентный LLM-узел, создание конфигурации и верификацию. Плоскость данных потоково обрабатывается Greenmask: он передаёт сопоставителю только запрос на уже существующую замену SQLite и никогда не вызывает LLM для каждой строки.
 
-## OSS и собственные интеграции
+## Используемые OSS-компоненты и собственные интеграции
 
-| Component | Role | Project code |
+| Компонент | Назначение | Код проекта |
 |---|---|---|
-| PostgreSQL 16.14 | Source and target | Safe inspector, collector, reset and verifier queries |
-| Greenmask 0.2.22 | Logical dump, stream transform, restore | Generated YAML, Cmd mapper and safe subprocess runner |
-| LangGraph 1.2.9 | Workflow/checkpoints | Typed state and deterministic nodes |
-| OpenRouter / DeepSeek V4 Flash | Synthetic pool generation | JSON-schema provider, local validation/retry |
-| psycopg 3.3.4 | PostgreSQL access | Read-only source, server-side collector |
-| SQLite | Registry/checkpoint files | Opaque mapping schema and compatibility checks |
+| PostgreSQL 16.14 | Исходная и целевая БД | Безопасный инспектор, сборщик, очистка и запросы верификатора |
+| Greenmask 0.2.22 | Логическая выгрузка, потоковое преобразование, восстановление | Сгенерированный YAML, Cmd-сопоставитель и безопасный запуск подпроцессов |
+| LangGraph 1.2.9 | Оркестрация и контрольные точки | Типизированное состояние и детерминированные узлы |
+| OpenRouter / DeepSeek V4 Flash | Генерация синтетического пула | Провайдер JSON Schema, локальная валидация и повторные попытки |
+| psycopg 3.3.4 | Доступ к PostgreSQL | Соединение только для чтения с исходной БД и серверный сборщик |
+| SQLite | Реестр и файлы контрольных точек | Непрозрачная схема сопоставлений и проверки совместимости |
 
 ## Быстрый запуск
 
-### Prerequisites
+### Предварительные требования
 
-- Docker Desktop/Engine with Compose v2;
-- GNU Make and [uv](https://docs.astral.sh/uv/) for `make test`, `make lint` and `make clean`;
-- an OpenRouter API key permitted to call `deepseek/deepseek-v4-flash`;
-- approximately 4 GB RAM and free disk for PostgreSQL images/dumps.
+- Docker Desktop/Engine с Compose v2;
+- GNU Make и [uv](https://docs.astral.sh/uv/) для `make test`, `make lint` и `make clean`;
+- ключ API OpenRouter с доступом к `deepseek/deepseek-v4-flash`;
+- примерно 4 ГБ ОЗУ и свободное место на диске для образов и выгрузок PostgreSQL.
 
 ```bash
 cp .env.example .env
-# Replace every placeholder; SANITIZER_HMAC_KEY must be a private random value of >=32 bytes.
-# The example HMAC placeholder is intentionally too short, so it cannot be used by accident.
+# Замените все заполнители; SANITIZER_HMAC_KEY должен быть приватным случайным значением длиной не менее 32 байт.
+# Заполнитель HMAC в примере намеренно слишком короткий, поэтому его нельзя случайно использовать.
 make demo
 ```
 
-`make demo` always recreates the synthetic source/target volumes, uses **the real OpenRouter model**, and writes:
+`make demo` всегда заново создаёт синтетические тома исходной и целевой БД, использует **реальную модель OpenRouter** и записывает:
 
 ```text
 .runs/demo/
@@ -96,10 +96,10 @@ make demo
   logs.jsonl
   report.json
   report.md
-  demo-before-after.md        # synthetic demo only
+  demo-before-after.md        # только синтетическая демонстрация
 ```
 
-Required CLI commands are:
+Обязательные команды CLI:
 
 ```bash
 db-sanitizer run --policy config/policy.demo.yaml --run-id demo
@@ -107,11 +107,11 @@ db-sanitizer run --policy config/policy.demo.yaml --run-id demo --resume
 db-sanitizer verify --policy config/policy.demo.yaml --run-id demo
 ```
 
-`run` with an existing ID fails unless `--resume` is used. `verify` regenerates the safe reports without making LLM calls.
+`run` с уже существующим идентификатором завершается ошибкой, если не указан `--resume`. Команда `verify` заново создаёт безопасные отчёты без вызовов LLM.
 
-## Policy
+## Политика
 
-`config/policy.demo.yaml` is copied from the normative example and retains its groups/semantics. Connections and secrets are env-variable *names*, never inline DSNs.
+`config/policy.demo.yaml` скопирован из нормативного примера и сохраняет его группы и семантику. Соединения и секреты задаются *именами* переменных окружения, а не встроенными DSN.
 
 ```yaml
 groups:
@@ -127,32 +127,32 @@ groups:
         column: billing_name
 ```
 
-The validator rejects unknown/duplicate/unsupported columns, incompatible lengths, same source/target DSNs, empty groups, partial transformed natural FK/PK relationships, missing env values and a target that is not explicitly allowed to be recreated.
+Валидатор отклоняет неизвестные, дублирующиеся и неподдерживаемые столбцы, несовместимые длины, одинаковые DSN исходной и целевой БД, пустые группы, частично преобразованные связи естественных FK/PK, отсутствующие значения переменных окружения и целевую БД без явного разрешения на пересоздание.
 
 ## Сквозные замены
 
-1. Collector uses a named server-side cursor and `SELECT DISTINCT` per declared column.
-2. It normalizes the value (`human_text`, `email`, or `phone`) and stores only its group-scoped HMAC key.
-3. SQLite enforces one replacement per source key and one normalized replacement per group.
-4. LLM gets no raw value, source HMAC, DSN or schema. It generates a synthetic pool from metadata/constraints only.
-5. The mapper applies the identical normalisation/HMAC and performs a SQLite lookup.
-6. A missing mapping, malformed JSONL, invalid generation or collision fails closed; no source fallback exists.
+1. Сборщик использует именованный серверный курсор и `SELECT DISTINCT` для каждого объявленного столбца.
+2. Он нормализует значение (`human_text`, `email` или `phone`) и сохраняет только HMAC-ключ, ограниченный группой.
+3. SQLite обеспечивает одну замену для каждого исходного ключа и одну нормализованную замену для каждой группы.
+4. LLM не получает исходное значение, HMAC исходного значения, DSN или схему. Она генерирует синтетический пул только на основе метаданных и ограничений.
+5. Сопоставитель применяет идентичную нормализацию/HMAC и выполняет поиск в SQLite.
+6. Отсутствующее сопоставление, некорректный JSONL, невалидная генерация или коллизия приводят к закрытому отказу; подстановки исходного значения не существует.
 
-`NULL` is preserved. Consistency is group-scoped: the same normalized `customers.full_name` and `orders.billing_name` map identically, while an equal string in an unrelated group does not.
+`NULL` сохраняется. Консистентность ограничена группой: одинаковые нормализованные `customers.full_name` и `orders.billing_name` получают идентичную замену, тогда как одинаковая строка в несвязанной группе — нет.
 
-## LLM use
+## Использование LLM
 
-The only LLM-owning node is `generate_replacements_agent`. It calls OpenRouter Chat Completions with JSON Schema:
+Единственный узел, владеющий LLM, — `generate_replacements_agent`. Он вызывает OpenRouter Chat Completions с JSON Schema:
 
 ```json
 {"items": [{"value": "..."}]}
 ```
 
-Local Pydantic validation enforces string/length/regex, normalized uniqueness, no source-key collision and all target-column lengths. Invalid values are dropped; a bounded surplus and retries request only non-sensitive synthetic replacements. A sampling seed/temperature and non-sensitive format variation avoid repeated canonical model examples without exposing source data.
+Локальная валидация Pydantic проверяет тип строки, длину, регулярное выражение, уникальность после нормализации, отсутствие коллизии с исходным ключом и допустимую длину во всех целевых столбцах. Невалидные значения отбрасываются; ограниченный избыток и повторные попытки запрашивают только нечувствительные синтетические замены. Параметры случайности выборки и температуры, а также нечувствительное изменение формата предотвращают повторение типовых примеров модели без раскрытия исходных данных.
 
-Prompt fields are limited to entity type, locale, requested synthetic count and format constraints. Prompts, full model responses, raw values, API keys and DSNs are not written to `logs.jsonl`, LangGraph state, registry or reports.
+Поля запроса ограничены типом сущности, локалью, требуемым числом синтетических значений и ограничениями формата. Запросы, полные ответы модели, исходные значения, ключи API и DSN не записываются в `logs.jsonl`, состояние LangGraph, реестр или отчёты.
 
-## Workflow and resume
+## Пайплайн и возобновление
 
 ```text
 load_policy
@@ -164,102 +164,102 @@ load_policy
   -> verify_and_report
 ```
 
-Each successful node is checkpointed in `.runs/<run_id>/state.sqlite3` with `thread_id=run_id`. Resume validates policy hash, current schema fingerprint, model/provider and HMAC-key fingerprint via the registry. Mapping assignments and LLM evidence are transactional, so a completed generation node is not repeated.
+Каждый успешно выполненный узел сохраняется в `.runs/<run_id>/state.sqlite3` с `thread_id=run_id`. При возобновлении проверяются хеш политики, текущий отпечаток схемы, модель/провайдер и отпечаток HMAC-ключа через реестр. Назначения сопоставлений и доказательства работы LLM сохраняются транзакционно, поэтому завершённый узел генерации не выполняется повторно.
 
-## Required verification
+## Обязательная верификация
 
-`report.json` validates against `templates/run-report.schema.json`; `passed` is impossible if any required check is not `pass`.
+`report.json` проходит проверку по `templates/run-report.schema.json`; статус `passed` невозможен, если хотя бы одна обязательная проверка не имеет статуса `pass`.
 
-- source schema fingerprint, table/column/type equivalence;
-- per-table row count and per-column `NULL`/distinct count;
-- validated FKs and orphan queries;
-- PK/UNIQUE definitions, duplicate checks and unchanged surrogate keys;
-- PK-aligned registry mapping checks;
-- source/target normalized-HMAC nonintersection;
-- rejection of a one-value placeholder column.
+- отпечаток исходной схемы, эквивалентность таблиц, столбцов и типов;
+- число строк по таблицам и число `NULL`/уникальных значений по столбцам;
+- валидированные FK и запросы на поиск сиротских строк;
+- определения PK/UNIQUE, поиск дубликатов и неизменность суррогатных ключей;
+- проверки сопоставлений реестра с выравниванием по PK;
+- отсутствие пересечения нормализованных HMAC исходной и целевой БД;
+- отклонение столбца с одной заглушкой для всех значений.
 
-The Greenmask preflight intentionally does **not** use `validate --strict`: Greenmask emits a generic warning for every `Cmd`-transformed UNIQUE column even when mappings are one-to-one. The independent required UNIQUE verifier is authoritative and fails closed.
+Предварительная проверка Greenmask намеренно **не** использует `validate --strict`: Greenmask выдаёт общее предупреждение для каждого UNIQUE-столбца, преобразованного `Cmd`, даже когда сопоставления являются взаимно однозначными. Независимый обязательный верификатор UNIQUE считается авторитетным и работает с закрытым отказом.
 
-## Synthetic before/after
+## Синтетическое сравнение до/после
 
-`demo-before-after.md` is a separate artifact and is created only because demo seed data are synthetic. It must never be enabled for a production-like database. It shows PK-aligned examples for all groups and cross-table duplicate fields; `report.json` and `report.md` contain aggregates only.
+`demo-before-after.md` — отдельный артефакт, который создаётся только потому, что демонстрационные исходные данные синтетические. Его нельзя включать для базы данных, похожей на производственную. Он показывает примеры, выровненные по PK, для всех групп и повторяющихся полей из разных таблиц; `report.json` и `report.md` содержат только агрегаты.
 
-Illustrative synthetic-only output (actual replacements vary because the real model is sampled):
+Иллюстративный синтетический вывод (фактические замены меняются, поскольку используется выборка реальной модели):
 
-| Source field(s) | Before | After |
+| Исходные поля | До | После |
 |---|---|---|
-| `customers.full_name`, `orders.billing_name` for customer 1 | `Алексей Соколов` | `Павел Степанов` in both tables |
-| `customers.email`, `orders.contact_email` for customer 1 | `client001@source.demo` | `synthetic4-022@example.test` in both tables |
-| `customers.phone`, `support_tickets.callback_phone` for customer 1 | `8 (999) 200-00-01` | `+7 000 178-64-23` in both tables |
+| `customers.full_name`, `orders.billing_name` для клиента 1 | `Алексей Соколов` | `Павел Степанов` в обеих таблицах |
+| `customers.email`, `orders.contact_email` для клиента 1 | `client001@source.demo` | `synthetic4-022@example.test` в обеих таблицах |
+| `customers.phone`, `support_tickets.callback_phone` для клиента 1 | `8 (999) 200-00-01` | `+7 000 178-64-23` в обеих таблицах |
 
-## Tests
+## Тесты
 
 ```bash
 make lint
 make test
 ```
 
-- unit: policy, normalisation/HMAC, registry, LLM retry/structured output, mapper and report contracts;
-- security: known PII markers are scanned across registry/config/log/report artifacts;
-- integration: Docker-backed fake-provider workflow, resume, and composite-FK regression tests are marked `integration` and require the seeded Compose stack (`DB_SANITIZER_RUN_INTEGRATION=1`).
+- модульные: политика, нормализация/HMAC, реестр, повторные попытки LLM/структурированный вывод, контракты сопоставителя и отчёта;
+- безопасность: известные маркеры PII проверяются в артефактах реестра, конфигурации, логов и отчёта;
+- интеграционные: Docker-сценарии с тестовым провайдером, возобновлением и регрессией составных FK помечены `integration` и требуют подготовленный стек Compose (`DB_SANITIZER_RUN_INTEGRATION=1`).
 
-Tests do not require OpenRouter, an internet connection or a model. `make demo` is the real-model check.
+Тесты не требуют OpenRouter, доступа в интернет или модели. `make demo` — проверка с реальной моделью.
 
-## Performance smoke
+## Проверка производительности
 
 ```bash
 make perf PERF_ROWS=100000
 ```
 
-The target creates 100 customers, 100,000 orders and 50,000 tickets (150,100 total rows) with only 400 distinct mappings. The target explicitly sets `DB_SANITIZER_USE_FAKE_PROVIDER=1`; this is not a fallback and isolates streaming data-plane throughput from remote LLM latency/cost. It writes `perf-results/benchmark-100000.json` and `.md`.
+Цель создаёт 100 клиентов, 100 000 заказов и 50 000 обращений в поддержку (всего 150 100 строк), но только 400 уникальных сопоставлений. Цель явно устанавливает `DB_SANITIZER_USE_FAKE_PROVIDER=1`; это не резервный режим, а изоляция пропускной способности плоскости данных от задержки и стоимости удалённой LLM. Она записывает `perf-results/benchmark-100000.json` и `.md`.
 
-Measured on the host above:
+Измерено на указанном выше хосте:
 
-| Rows | Distinct mappings | Collect | LLM | Dump+transform | Restore | Verify | Peak RSS |
+| Строки | Уникальные сопоставления | Сбор | LLM | Выгрузка и преобразование | Восстановление | Верификация | Пиковый RSS |
 |---:|---:|---:|---:|---:|---:|---:|---:|
-| 150,100 | 400 | 9.097 s | 42.481 s | 613.773 s | 9.690 s | 1,524.605 s | 107,737,088 B |
+| 150 100 | 400 | 9,097 с | 42,481 с | 613,773 с | 9,690 с | 1 524,605 с | 107 737 088 байт |
 
-This is a smoke benchmark, not an SLA. The high verifier time reflects Docker Desktop bind-mounted I/O and full PK-aligned proof scans.
+Это проверка работоспособности производительности, а не SLA. Большое время верификатора связано с файловым вводом-выводом Docker Desktop через bind mount и полными проверками с выравниванием по PK.
 
-## Security
+## Безопасность
 
-- source connections execute `SET TRANSACTION READ ONLY`;
-- credentials/HMAC key are resolved only from environment and never serialized;
-- DSNs are redacted in safe error paths;
-- all identifiers use `psycopg.sql.Identifier`; all data values are parameters;
-- Greenmask subprocesses receive argument lists, never shell interpolation;
-- raw transformer/process diagnostics are discarded rather than captured;
-- mapping DB and run artifacts use restrictive permissions where supported;
-- mapper errors contain table/column plus a short HMAC prefix, never the value.
+- соединения с исходной БД выполняют `SET TRANSACTION READ ONLY`;
+- учётные данные и HMAC-ключ извлекаются только из окружения и никогда не сериализуются;
+- DSN редактируются в безопасных путях ошибок;
+- все идентификаторы формируются через `psycopg.sql.Identifier`, а все значения данных передаются параметрами;
+- подпроцессы Greenmask получают списки аргументов, а не строковую интерполяцию оболочки;
+- необработанные диагностические сообщения трансформера и процессов отбрасываются, а не сохраняются;
+- БД сопоставлений и артефакты запуска используют ограничивающие права там, где это поддерживается;
+- ошибки сопоставителя содержат таблицу/столбец и короткий префикс HMAC, но никогда не содержат значение.
 
-The mapping database is a sensitive operational artifact even though it lacks raw source strings.
+База сопоставлений является чувствительным операционным артефактом, хотя и не содержит исходных строк.
 
-## Scaling and extension points
+## Масштабирование и точки расширения
 
-Rows stream through Greenmask; collector uses bounded cursor batches; mappings are on disk; LLM calls scale with distinct HMAC keys, not row count. `ReplacementProvider`, normalisation, registry and DB/data-plane boundaries are isolated so a future local provider, another DB adapter or document adapter can be added without rewriting mapper semantics.
+Строки потоково проходят через Greenmask; сборщик использует ограниченные пакеты курсора; сопоставления хранятся на диске; вызовы LLM масштабируются по числу уникальных HMAC-ключей, а не по числу строк. Границы `ReplacementProvider`, нормализации, реестра и адаптеров БД/плоскости данных изолированы, поэтому в будущем можно добавить локальный провайдер, другой адаптер БД или адаптер документов без переписывания семантики сопоставителя.
 
-## Alternatives and trade-offs
+## Альтернативы и компромиссы
 
-- Custom COPY pipeline: rejected because Greenmask already owns dump/restore streaming.
-- Greenmask built-ins only: rejected because task requires LLM replacements and centralized mappings.
-- PostgreSQL Anonymizer: viable SQL masking alternative, less direct for this registry/LLM PoC.
-- Faker-only/per-row LLM: rejected; neither meets the LLM requirement efficiently.
-- Cloud LLM: originally rejected, but selected here only by explicit later instruction; metadata leave the local host, raw PII do not.
+- Собственный конвейер COPY: отклонён, потому что Greenmask уже обеспечивает потоковую выгрузку и восстановление.
+- Только встроенные преобразования Greenmask: отклонены, поскольку задача требует LLM-замены и централизованные сопоставления.
+- PostgreSQL Anonymizer: жизнеспособная альтернатива SQL-маскирования, но менее прямая для этого PoC с реестром и LLM.
+- Только Faker / LLM для каждой строки: отклонены; ни один подход не выполняет требование к LLM эффективно.
+- Облачная LLM: изначально отклонена, но выбрана здесь только по явному позднему указанию; метаданные покидают локальный хост, исходные PII — нет.
 
-## Limits
+## Ограничения
 
-This is a deliberately small PoC. It does not detect unlisted PII, sanitize free text/JSON/documents, support multiple concurrent writers to one registry, guarantee statistical distribution matching, or operate as a production HA/RBAC platform. Policy completeness remains the operator's responsibility.
+Это намеренно небольшой PoC. Он не обнаруживает неуказанные PII, не санитизирует свободный текст/JSON/документы, не поддерживает нескольких параллельных авторов одного реестра, не гарантирует совпадение статистических распределений и не является производственной платформой HA/RBAC. Полнота политики остаётся ответственностью оператора.
 
-## Project structure
+## Структура проекта
 
 ```text
-src/db_sanitizer/     CLI, LangGraph, policy, registry, LLM, Greenmask, verifier
-demo/                 synthetic schema, seed and performance seed generator
-config/               explicit demo policy
-tests/                unit, integration and security tests
-scripts/              clean, wait and benchmark helpers
+src/db_sanitizer/     CLI, LangGraph, политика, реестр, LLM, Greenmask, верификатор
+demo/                 синтетическая схема, данные и генератор данных для замера производительности
+config/               явная демонстрационная политика
+tests/                модульные, интеграционные тесты и тесты безопасности
+scripts/              вспомогательные скрипты очистки, ожидания и бенчмарка
 ```
 
-## License
+## Лицензия
 
-MIT. See [LICENSE](LICENSE).
+MIT. См. [LICENSE](LICENSE).
