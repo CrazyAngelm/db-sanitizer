@@ -1,0 +1,30 @@
+db-sanitizer/
+├── src/db_sanitizer/
+│   ├── __init__.py
+│   ├── cli.py
+│   ├── graph.py
+│   ├── state.py
+│   ├── settings.py
+│   ├── errors.py
+│   ├── safe_logging.py
+│   ├── policy/{models.py,loader.py,validator.py}
+│   ├── postgres/{connection.py,inspector.py,collector.py}
+│   ├── mapping/{normalization.py,hmac_key.py,registry.py}
+│   ├── llm/{base.py,models.py,ollama_provider.py,fake_provider.py,generator.py}
+│   ├── greenmask/{config_builder.py,runner.py,mapper_process.py}
+│   └── verify/{checks.py,runner.py,report.py}
+├── config/policy.demo.yaml
+├── demo/sql/{schema.sql,seed.sql}
+├── demo/seed_generator.py
+├── tests/{unit,integration,security}/
+├── scripts/{wait_for_postgres.sh,pull_ollama_model.sh}
+├── docker-compose.yml
+├── Dockerfile
+├── Makefile
+├── pyproject.toml
+├── uv.lock
+├── .env.example
+├── .gitignore
+├── LICENSE
+├── IMPLEMENTATION_REPORT.md
+└── README.md

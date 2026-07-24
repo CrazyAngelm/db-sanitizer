@@ -1,0 +1,94 @@
+{
+  "package": "db-sanitizer-specification",
+  "version": "1.0.0",
+  "created_at": "2026-07-23",
+  "contains_application_source_code": false,
+  "source_document": "references/original-test-task.docx",
+  "files": [
+    {
+      "path": "ACCEPTANCE_AND_TESTS.md",
+      "size_bytes": 10204,
+      "sha256": "e157ddc2b19c877a6cbe909d78418faaca2ed9ec8a05024901dd628cad489f41"
+    },
+    {
+      "path": "ARCHITECTURE.md",
+      "size_bytes": 9917,
+      "sha256": "305ff6ea8ad3db78e402fb3c68c9bb7e99be45701bb0093ae0c1a83365c23a1b"
+    },
+    {
+      "path": "FINAL_REPO_README_TEMPLATE.md",
+      "size_bytes": 4597,
+      "sha256": "f4cb540d69c682abf37e3be2435cc4bbd6360f9fbf8e8bca1cd703ab85f91c5d"
+    },
+    {
+      "path": "IMPLEMENTATION_PLAN.md",
+      "size_bytes": 9064,
+      "sha256": "0139929bff9cb6fd4d81d8f5f4496de656e6454b1219fa4031fbd4ee7338efbc"
+    },
+    {
+      "path": "README.md",
+      "size_bytes": 4259,
+      "sha256": "1c46884b94e45eb46c4c8f465b11def9d8f286d8d4afccca064cff438d4b84ab"
+    },
+    {
+      "path": "SCOPE_AND_DECISIONS.md",
+      "size_bytes": 11273,
+      "sha256": "bdac73bfea87dea8ac847e8cc1bf2d6a97f799f43abbe048cbdef0e6750a0cd2"
+    },
+    {
+      "path": "SOURCE_REQUIREMENTS.md",
+      "size_bytes": 6566,
+      "sha256": "5353db3632441de33fb0ed744aa7e370119a1c76ef89c6cabf33a0f28ee6decf"
+    },
+    {
+      "path": "TECHNICAL_SPEC.md",
+      "size_bytes": 17100,
+      "sha256": "3380f9e36a4e764fa457e6e7c0d45604d11c1eb814dc612fba0afd3cceaacde5"
+    },
+    {
+      "path": "TRACEABILITY_MATRIX.md",
+      "size_bytes": 2369,
+      "sha256": "22c7af9687027be1fcebd13c5bc84c93d1ccfd8ec3a68820e3a8bac9d0bf0465"
+    },
+    {
+      "path": "VERSION",
+      "size_bytes": 6,
+      "sha256": "59854984853104df5c353e2f681a15fc7924742f9a2e468c29af248dce45ce03"
+    },
+    {
+      "path": "references/official-sources.md",
+      "size_bytes": 2466,
+      "sha256": "4f55b262fd4bfdad1cef14474dce91bae7bc1c179370fe954057be127f9a9a9b"
+    },
+    {
+      "path": "references/original-test-task.docx",
+      "size_bytes": 24458,
+      "sha256": "afdb82f77b8fc6655e3339ed84db5ebe10c011d97b17a2ca67264488452928d4"
+    },
+    {
+      "path": "references/original-test-task.txt",
+      "size_bytes": 8017,
+      "sha256": "a9bda0d548f65963838f24f692171e2ca711e0e153646cc7daf58b655cd2a60a"
+    },
+    {
+      "path": "templates/architecture.mmd",
+      "size_bytes": 603,
+      "sha256": "53a907c3c939c7c0c5ef82840203433d74431d6942133156c8849e31258dd86b"
+    },
+    {
+      "path": "templates/project-tree.txt",
+      "size_bytes": 1083,
+      "sha256": "25bd690a2f6929a803d15bffaaa54af1959a7f601765ff7c195c74e4dee81f5a"
+    },
+    {
+      "path": "templates/run-report.schema.json",
+      "size_bytes": 4942,
+      "sha256": "c7f6249acc53e3f1b06c5c2b04dfe4dfb9e6383e460e3e84890eabf7e148e7c4"
+    },
+    {
+      "path": "templates/sanitizer-policy.example.yaml",
+      "size_bytes": 2756,
+      "sha256": "d9ca9fae018b248eb24c66fe1c295caeb835579f71ef8c0474eb9eceb4c15d4e"
+    }
+  ]
+}

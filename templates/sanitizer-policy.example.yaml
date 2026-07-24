@@ -1,0 +1,109 @@
+version: 1
+
+run:
+  directory: .runs
+  allow_target_recreate: true
+  collector_fetch_size: 1000
+
+connections:
+  source_dsn_env: SOURCE_DATABASE_URL
+  target_dsn_env: TARGET_DATABASE_URL
+
+mapping:
+  registry_filename: mappings.sqlite3
+  hmac_key_env: SANITIZER_HMAC_KEY
+  hmac_algorithm: sha256
+
+llm:
+  provider: ollama
+  base_url_env: OLLAMA_BASE_URL
+  model: qwen3:4b-instruct
+  batch_size: 25
+  max_retries: 3
+  timeout_seconds: 120
+  structured_output: true
+
+# Реализация должна закрепить Greenmask 0.2.22.
+greenmask:
+  binary: greenmask
+  storage_dirname: dump
+  mapper_timeout_seconds: 60
+  validate_output: true
+
+groups:
+  person_name:
+    entity_type: person_name
+    locale: ru-RU
+    normalization: human_text
+    allow_empty: false
+    generation:
+      description: "Реалистичное русское имя и фамилия; только синтетические данные"
+      min_length: 5
+      max_length: 100
+      regex: "^[А-ЯЁ][А-Яа-яЁё-]+ [А-ЯЁ][А-Яа-яЁё-]+$"
+    columns:
+      - schema: public
+        table: customers
+        column: full_name
+      - schema: public
+        table: orders
+        column: billing_name
+
+  email:
+    entity_type: email
+    locale: ru-RU
+    normalization: email
+    allow_empty: false
+    generation:
+      description: "Синтетический email в безопасном тестовом домене example.test"
+      min_length: 8
+      max_length: 120
+      regex: "^[a-z0-9._-]+@example\\.test$"
+    columns:
+      - schema: public
+        table: customers
+        column: email
+      - schema: public
+        table: orders
+        column: contact_email
+
+  phone:
+    entity_type: phone
+    locale: ru-RU
+    normalization: phone
+    allow_empty: false
+    generation:
+      description: "Синтетический телефон формата +7 000 123-45-67"
+      min_length: 16
+      max_length: 18
+      regex: "^\\+7 000 [0-9]{3}-[0-9]{2}-[0-9]{2}$"
+    columns:
+      - schema: public
+        table: customers
+        column: phone
+      - schema: public
+        table: support_tickets
+        column: callback_phone
+
+  address:
+    entity_type: address
+    locale: ru-RU
+    normalization: human_text
+    allow_empty: false
+    generation:
+      description: "Правдоподобный синтетический российский адрес одной строкой"
+      min_length: 12
+      max_length: 180
+    columns:
+      - schema: public
+        table: customers
+        column: address
+      - schema: public
+        table: support_tickets
+        column: delivery_address
+
+report:
+  json_filename: report.json
+  markdown_filename: report.md
+  include_synthetic_demo_before_after: true
+  sample_rows: 5
