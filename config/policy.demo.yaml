@@ -15,15 +15,17 @@ mapping:
   hmac_key_env: SANITIZER_HMAC_KEY
   hmac_algorithm: sha256
 
+# Основной локальный demo-provider. Имя модели можно переопределить в .env.
 llm:
-  provider: openrouter
-  base_url_env: OPENROUTER_BASE_URL
-  api_key_env: OPENROUTER_API_KEY
-  model: deepseek/deepseek-v4-flash
+  provider: ollama
+  base_url_env: OLLAMA_BASE_URL
+  model: qwen3:4b
+  model_env: OLLAMA_MODEL
   temperature: 1.15
-  batch_size: 25
-  max_retries: 3
-  timeout_seconds: 120
+  # Smaller batches and a longer timeout make local CPU inference reliable.
+  batch_size: 10
+  max_retries: 5
+  timeout_seconds: 600
   structured_output: true
 
 # Greenmask is pinned to 0.2.22 by Docker image and runner validation.

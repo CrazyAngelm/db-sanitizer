@@ -1,17 +1,16 @@
 # Матрица трассируемости
 
-> **Актуальный runtime-контракт:** основной сценарий использует OpenRouter
-> `deepseek/deepseek-v4-flash`; локальный Ollama поддержан как необязательный
-> provider через отдельную policy и Compose-профиль. Историческое требование
-> Ollama-only для `make demo` заменено выбором пользователя и хранится только
-> как контекст в `docs/history/`.
+> **Актуальный runtime-контракт:** основной сценарий использует локальный
+> Ollama `qwen3:4b` через `make demo`; `OLLAMA_MODEL` выбирает и скачивает ту
+> же модель, что использует policy. OpenRouter `deepseek/deepseek-v4-flash`
+> сохранён как необязательный удалённый provider через `make demo-openrouter`.
 
 | Source ID | Реализация/решение | Acceptance checks |
 |---|---|---|
 | FR-01 | PostgreSQL 16 adapter и demo | AC-001, AC-030 |
 | FR-02 | Source connection -> Greenmask dump -> target restore | AC-001, AC-031 |
 | FR-03 | Entity-specific constraints и генерация правдоподобных synthetic строк через provider contract | AC-012, AC-013 |
-| FR-04 | LangGraph generation agent вызывает OpenRouter по умолчанию либо необязательный Ollama | AC-011, optional local AC-010 |
+| FR-04 | LangGraph generation agent вызывает Ollama по умолчанию либо необязательный OpenRouter | AC-010, optional remote AC-011 |
 | FR-05 | Consistency groups + normalized HMAC + SQLite registry | AC-020..026 |
 | FR-06 | PK/FK strategy, Greenmask schema restore, verifier | AC-033..035 |
 | FR-07 | Per-table row count verification | AC-031 |

@@ -1,4 +1,4 @@
-"""Native Ollama Chat API implementation for optional local generation."""
+"""Native Ollama Chat API implementation for default local generation."""
 
 from __future__ import annotations
 

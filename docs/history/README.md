@@ -5,8 +5,8 @@
 Актуальный контракт репозитория задают:
 
 - корневой [README](../../README.md);
-- `config/policy.demo.yaml` — основной сценарий OpenRouter;
-- `config/policy.ollama.yaml` — необязательный локальный сценарий Ollama;
+- `config/policy.demo.yaml` — основной локальный сценарий Ollama;
+- `config/policy.openrouter.yaml` — необязательный удалённый сценарий OpenRouter;
 - [ARCHITECTURE.md](../../ARCHITECTURE.md) и [IMPLEMENTATION_REPORT.md](../../IMPLEMENTATION_REPORT.md).
 
 Исторические документы сохранены для трассируемости и намеренно могут описывать прежний Ollama-only вариант.

@@ -5,8 +5,8 @@ flowchart TD
     C --> R[(SQLite mapping registry)]
     LG --> A[generate_replacements_agent]
     A --> LLM[ReplacementProvider]
-    LLM --> OR[OpenRouter default]
-    LLM --> OL[Optional local Ollama]
+    LLM --> OL[Ollama default]
+    LLM --> OR[Optional OpenRouter]
     A --> R
     LG --> G[Generated Greenmask config]
     S[(Source PostgreSQL)] --> GM[Greenmask dump]

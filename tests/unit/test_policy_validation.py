@@ -100,11 +100,12 @@ def test_valid_demo_policy_loads() -> None:
 
     assert loaded.policy.version == 1
     assert set(loaded.policy.groups) == {"person_name", "email", "phone", "address"}
-    assert loaded.policy.llm.provider == "openrouter"
+    assert loaded.policy.llm.provider == "ollama"
+    assert loaded.policy.llm.model_env == "OLLAMA_MODEL"
 
 
-def test_optional_ollama_policy_loads_without_an_api_key() -> None:
-    loaded = load_policy("config/policy.ollama.yaml")
+def test_default_ollama_policy_loads_without_an_api_key() -> None:
+    loaded = load_policy("config/policy.demo.yaml")
     runtime = resolve_policy_runtime(
         loaded,
         {
@@ -112,15 +113,23 @@ def test_optional_ollama_policy_loads_without_an_api_key() -> None:
             "TARGET_DATABASE_URL": "postgresql://target:password@target-db:5432/target",
             "SANITIZER_HMAC_KEY": "x" * 32,
             "OLLAMA_BASE_URL": "http://ollama:11434",
+            "OLLAMA_MODEL": "qwen2.5:3b",
         },
     )
 
     assert loaded.policy.llm.provider == "ollama"
     assert runtime.provider_base_url == "http://ollama:11434"
     assert runtime.provider_api_key is None
+    assert runtime.provider_model == "qwen2.5:3b"
 
 
-def test_fake_provider_mode_does_not_require_openrouter_credentials() -> None:
+def test_optional_openrouter_policy_loads() -> None:
+    loaded = load_policy("config/policy.openrouter.yaml")
+
+    assert loaded.policy.llm.provider == "openrouter"
+
+
+def test_fake_provider_mode_does_not_require_provider_credentials() -> None:
     loaded = load_policy("config/policy.demo.yaml")
     runtime = resolve_policy_runtime(
         loaded,
@@ -221,8 +230,8 @@ def test_policy_rejects_same_source_target(source_dsn: str, target_dsn: str) -> 
         "SOURCE_DATABASE_URL": source_dsn,
         "TARGET_DATABASE_URL": target_dsn,
         "SANITIZER_HMAC_KEY": "x" * 32,
-        "OPENROUTER_BASE_URL": "https://openrouter.ai/api/v1",
-        "OPENROUTER_API_KEY": "not-a-real-key",
+        "OLLAMA_BASE_URL": "http://ollama:11434",
+        "OLLAMA_MODEL": "qwen3:4b",
     }
 
     with pytest.raises(PolicyError, match="different databases"):

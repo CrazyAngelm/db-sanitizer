@@ -69,6 +69,8 @@ def resolve_policy_runtime(
         hmac_key_env=policy.mapping.hmac_key_env,
         provider_base_url_env=policy.llm.base_url_env,
         provider_api_key_env=api_key_env,
+        provider_model=policy.llm.model,
+        provider_model_env=policy.llm.model_env,
         environment=os.environ if environment is None else environment,
         require_provider_credentials=require_provider_credentials,
     )

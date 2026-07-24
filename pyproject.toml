@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "db-sanitizer"
 version = "0.1.0"
-description = "PostgreSQL sanitization PoC with Greenmask, LangGraph, and OpenRouter"
+description = "PostgreSQL sanitization PoC with Greenmask, LangGraph, and Ollama"
 readme = "README.md"
 requires-python = ">=3.12,<3.14"
 license = { text = "MIT" }

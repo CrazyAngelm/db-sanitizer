@@ -24,12 +24,12 @@
 
 ### Провайдеры
 
-Основной provider — OpenRouter `deepseek/deepseek-v4-flash`, выбранный пользователем для реального demo. Реализован также необязательный локальный `OllamaProvider`:
+Основной provider — локальный Ollama `qwen3:4b`; OpenRouter `deepseek/deepseek-v4-flash` сохранён как необязательная удалённая альтернатива:
 
 - discriminated union в `policy/models.py` различает `openrouter` и `ollama`;
-- `config/policy.demo.yaml` остаётся OpenRouter-default;
-- `config/policy.ollama.yaml` задаёт локальный provider без API key;
-- Compose-профиль `ollama` и `ollama-pull` запускаются только через `make demo-ollama`;
+- `config/policy.demo.yaml` задаёт Ollama-default и читает имя модели из `OLLAMA_MODEL`;
+- `config/policy.openrouter.yaml` задаёт удалённый provider с API key;
+- `make demo` сам запускает Compose-профиль `ollama`, выполняет model pull и сохраняет cache модели между обычными clean;
 - `DeterministicSyntheticProvider` остаётся только test/performance provider.
 
 Все providers используют один `ReplacementProvider` contract и получают только entity type, locale, количество и format constraints. Raw source PII, source HMAC, DSN и secrets не передаются модели.
@@ -68,10 +68,10 @@ PoC **не заявляет** автоматическое доказатель�
 | Команда / сценарий | Результат |
 |---|---|
 | `make lint` | успешно |
-| `make test` | 48 passed |
+| `make test` | 49 passed |
 | `make test-integration` | 3 Docker integration tests passed |
 | `make test-all` | unit/security + Docker integration passed |
-| `make demo` | реальный OpenRouter run, обязательные проверки passed |
+| `make demo` | Ollama `qwen3:4b`: 236 mappings, 36 batches, 3 258.49 s; обязательные проверки passed |
 | `make perf PERF_ROWS=100000` | passed, 150 100 total rows |
 | `make perf PERF_ROWS=1000000` | passed, 1 500 100 total rows |
 | tampered target | verifier returns exit 5 |

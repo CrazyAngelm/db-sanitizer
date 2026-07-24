@@ -22,8 +22,8 @@ flowchart TD
     C --> R[(SQLite mapping registry)]
     LG --> A[generate_replacements_agent]
     A --> LP[ReplacementProvider]
-    LP --> OR[OpenRouter по умолчанию]
-    LP --> OL[Необязательный локальный Ollama]
+    LP --> OL[Ollama по умолчанию]
+    LP --> OR[Необязательный OpenRouter]
     A --> R
     LG --> G[Конфигурация Greenmask]
     S[(Исходный PostgreSQL)] --> GM[Greenmask]
@@ -67,8 +67,8 @@ Greenmask потоково создаёт логическую выгрузку 
 
 | Provider | Роль | Выбор |
 |---|---|---|
-| OpenRouter `deepseek/deepseek-v4-flash` | Основной сценарий `make demo` | `config/policy.demo.yaml` |
-| Ollama | Необязательный локальный сценарий | `config/policy.ollama.yaml`, профиль Compose `ollama` |
+| Ollama (`OLLAMA_MODEL`, по умолчанию `qwen3:4b`) | Основной сценарий `make demo` | `config/policy.demo.yaml`, профиль Compose `ollama` |
+| OpenRouter `deepseek/deepseek-v4-flash` | Необязательный удалённый сценарий | `config/policy.openrouter.yaml` |
 | DeterministicSyntheticProvider | Только тесты и performance smoke | Явно через factory или `DB_SANITIZER_USE_FAKE_PROVIDER=1` |
 
 Оба реальных провайдера получают одинаковый безопасный контракт: `entity_type`, `locale`, `count`, описание формата, длины и регулярное выражение. Исходные строки, source HMAC, DSN, схему и секреты провайдер не получает.
@@ -126,5 +126,5 @@ PoC автоматически доказывает эквивалентност
 
 - Явная policy безопаснее и предсказуемее auto-discovery, но требует полноты со стороны оператора.
 - SQLite подходит для одиночного PoC-запуска; это не общий реестр для множества параллельных writers.
-- OpenRouter является основным demo-provider по выбранной конфигурации; Ollama доступен для локального контура без изменения data-plane.
+- Ollama является основным demo-provider и получает имя модели из `OLLAMA_MODEL`; OpenRouter остаётся необязательной удалённой альтернативой без изменения data-plane.
 - Before/after допускается только для синтетической demo-базы, иначе сам отчёт стал бы утечкой.

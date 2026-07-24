@@ -2,13 +2,16 @@ SHELL := /bin/sh
 
 UV := uv run
 COMPOSE := docker compose --env-file .env
+DOCKER := docker
+OLLAMA_VOLUME := db-sanitizer-ollama-data
 DEMO_RUN_ID ?= demo
 OLLAMA_DEMO_RUN_ID ?= demo-ollama
-OLLAMA_MODEL ?= qwen3:4b
+OPENROUTER_DEMO_RUN_ID ?= demo-openrouter
+OLLAMA_BOOTSTRAP_RETRIES ?= 3
 PERF_ROWS ?= 100000
 PERF_RUN_ID := perf-$(PERF_ROWS)
 
-.PHONY: demo demo-ollama test test-integration test-all lint clean perf
+.PHONY: demo demo-ollama demo-openrouter test test-integration test-all lint clean clean-ollama perf
 
 test:
 	$(UV) pytest -m "not integration"
@@ -28,18 +31,31 @@ lint:
 	$(UV) ruff check src tests demo scripts
 	$(UV) ruff format --check src tests demo scripts
 
-# Always starts from fresh synthetic source/target volumes and a new run directory.
+# Default demo: local Ollama, synthetic PostgreSQL data, and a fresh run directory.
 demo: clean
 	@test -f .env || (echo "Create .env from .env.example first" >&2; exit 2)
-	$(COMPOSE) up -d --build --wait source-db target-db
-	$(COMPOSE) run --rm --build --no-deps sanitizer run --policy config/policy.demo.yaml --run-id $(DEMO_RUN_ID)
+	@$(DOCKER) volume create $(OLLAMA_VOLUME) >/dev/null
+	@attempt=1; until $(COMPOSE) --profile ollama up -d --build --wait source-db target-db ollama; do \
+		if [ $$attempt -ge $(OLLAMA_BOOTSTRAP_RETRIES) ]; then exit 1; fi; \
+		echo "Ollama bootstrap failed; retrying ($$attempt/$(OLLAMA_BOOTSTRAP_RETRIES))..." >&2; \
+		attempt=$$((attempt + 1)); sleep 5; \
+	done
+	@attempt=1; until $(COMPOSE) --profile ollama run --rm --no-deps ollama-pull; do \
+		if [ $$attempt -ge $(OLLAMA_BOOTSTRAP_RETRIES) ]; then exit 1; fi; \
+		echo "Ollama model pull failed; retrying ($$attempt/$(OLLAMA_BOOTSTRAP_RETRIES))..." >&2; \
+		attempt=$$((attempt + 1)); sleep 5; \
+	done
+	$(COMPOSE) --profile ollama run --rm --build --no-deps sanitizer run --policy config/policy.demo.yaml --run-id $(DEMO_RUN_ID)
 
-# Optional local-model path; default make demo remains OpenRouter-backed.
-demo-ollama: clean
+# Backward-compatible name for the same local Ollama scenario.
+demo-ollama: DEMO_RUN_ID = $(OLLAMA_DEMO_RUN_ID)
+demo-ollama: demo
+
+# Optional remote-provider scenario; it is never used by the default demo.
+demo-openrouter: clean
 	@test -f .env || (echo "Create .env from .env.example first" >&2; exit 2)
-	OLLAMA_MODEL=$(OLLAMA_MODEL) $(COMPOSE) --profile ollama up -d --build --wait source-db target-db ollama
-	OLLAMA_MODEL=$(OLLAMA_MODEL) $(COMPOSE) --profile ollama run --rm --no-deps ollama-pull
-	$(COMPOSE) --profile ollama run --rm --build --no-deps sanitizer run --policy config/policy.ollama.yaml --run-id $(OLLAMA_DEMO_RUN_ID)
+	$(COMPOSE) up -d --build --wait source-db target-db
+	$(COMPOSE) run --rm --build --no-deps sanitizer run --policy config/policy.openrouter.yaml --run-id $(OPENROUTER_DEMO_RUN_ID)
 
 # Uses the explicit in-process test provider to isolate data-plane throughput from API latency/cost.
 perf: clean
@@ -50,5 +66,9 @@ perf: clean
 	$(UV) python scripts/write_benchmark.py --run-dir .runs/$(PERF_RUN_ID) --output perf-results/benchmark-$(PERF_ROWS).json --requested-rows $(PERF_ROWS)
 
 clean:
-	@if [ -f .env ]; then $(COMPOSE) down --volumes --remove-orphans; fi
+	@if [ -f .env ]; then $(COMPOSE) --profile ollama --profile test down --volumes --remove-orphans; fi
 	$(UV) python scripts/clean.py
+
+# Explicitly remove the cached local Ollama model; normal clean keeps it for fast retries.
+clean-ollama: clean
+	@$(DOCKER) volume rm -f $(OLLAMA_VOLUME) >/dev/null 2>&1 || true

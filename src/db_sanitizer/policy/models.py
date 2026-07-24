@@ -173,16 +173,17 @@ class BaseLLMSettings(BaseModel):
 
     base_url_env: EnvironmentName
     model: Annotated[str, Field(min_length=1, max_length=255)]
+    model_env: EnvironmentName | None = None
     temperature: Annotated[float, Field(ge=0, le=2)] = 1.15
     batch_size: Annotated[int, Field(ge=1, le=1_000)] = 25
     max_retries: Annotated[int, Field(ge=0, le=20)] = 3
     timeout_seconds: Annotated[int, Field(ge=1, le=3_600)] = 120
     structured_output: Literal[True] = True
 
-    @field_validator("base_url_env")
+    @field_validator("base_url_env", "model_env")
     @classmethod
-    def validate_base_url_env_name(cls, value: str) -> str:
-        if not _ENV_NAME.fullmatch(value):
+    def validate_base_url_env_name(cls, value: str | None) -> str | None:
+        if value is not None and not _ENV_NAME.fullmatch(value):
             raise ValueError("must be an uppercase environment variable name")
         return value
 
@@ -202,7 +203,7 @@ class OpenRouterLLMSettings(BaseLLMSettings):
 
 
 class OllamaLLMSettings(BaseLLMSettings):
-    """Optional local Ollama provider; it never needs an API key."""
+    """Local Ollama provider; it never needs an API key."""
 
     provider: Literal["ollama"]
 

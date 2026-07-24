@@ -5,12 +5,12 @@
 ## Статус
 
 - Полный путь: source PostgreSQL → HMAC registry → LLM → Greenmask Cmd JSONL mapper → target PostgreSQL → обязательная верификация и отчёт.
-- Основной demo-provider: OpenRouter `deepseek/deepseek-v4-flash`.
-- Необязательный локальный provider: Ollama через `config/policy.ollama.yaml` и Compose-профиль `ollama`.
+- Основной demo-provider: локальный Ollama через `config/policy.demo.yaml` и Compose-профиль `ollama`.
+- Необязательный удалённый provider: OpenRouter `deepseek/deepseek-v4-flash` через `config/policy.openrouter.yaml`.
 - Тесты не вызывают модель или OpenRouter; Docker нужен только для integration-сценария `make test-all`.
 - Зафиксированы PostgreSQL 16.14, Greenmask `v0.2.22`, Python 3.12.13, LangGraph 1.2.9, psycopg 3.3.4 и Pydantic 2.13.4.
 
-OpenRouter выбран пользователем для основного сценария. Он получает только нечувствительные метаданные генерации. Ollama реализован для локального изолированного запуска и не запускается без явной команды.
+Ollama — основной сценарий для получателя задания: `make demo` сам запускает контейнер, загружает выбранную модель и выполняет полный локальный pipeline. OpenRouter оставлен как необязательная удалённая альтернатива. Оба provider получают только нечувствительные метаданные генерации.
 
 ## Границы
 
@@ -26,8 +26,8 @@ flowchart TD
     C --> R[(SQLite mapping registry)]
     LG --> A[generate_replacements_agent]
     A --> LP[ReplacementProvider]
-    LP --> OR[OpenRouter по умолчанию]
-    LP --> OL[Необязательный Ollama]
+    LP --> OL[Ollama по умолчанию]
+    LP --> OR[Необязательный OpenRouter]
     A --> R
     S[(Source PostgreSQL)] --> GM[Greenmask]
     GM --> M[Долгоживущий Cmd JSONL mapper]
@@ -53,8 +53,8 @@ load_policy -> inspect_schema -> collect_mapping_keys
 
 | Provider | Назначение | Policy |
 |---|---|---|
-| OpenRouter `deepseek/deepseek-v4-flash` | Основной реальный demo | `config/policy.demo.yaml` |
-| Ollama | Необязательный локальный demo | `config/policy.ollama.yaml` |
+| Ollama `qwen3:4b` | Основной локальный demo | `config/policy.demo.yaml` |
+| OpenRouter `deepseek/deepseek-v4-flash` | Необязательный удалённый demo | `config/policy.openrouter.yaml` |
 | DeterministicSyntheticProvider | Только тесты/performance | Явно включён тестами или `DB_SANITIZER_USE_FAKE_PROVIDER=1` |
 
 Запрос к реальному provider содержит только тип сущности, локаль, число значений, ограничения длины/формата и регулярное выражение. Исходные PII, source HMAC, DSN, схема БД и секреты в него не попадают.
@@ -65,15 +65,13 @@ load_policy -> inspect_schema -> collect_mapping_keys
 
 Нужны Git, Docker Desktop/Engine с Docker Compose v2, GNU Make и [uv](https://docs.astral.sh/uv/). На Windows запускайте команды ниже из **Git Bash** или WSL: `Makefile` использует POSIX shell. Docker Desktop должен быть запущен.
 
-Проверка окружения:
-
 ```bash
 docker compose version
 make --version
 uv --version
 ```
 
-Для OpenRouter demo нужен ключ с доступом к `deepseek/deepseek-v4-flash`; его можно создать в [OpenRouter Keys](https://openrouter.ai/keys). Для локального Ollama ключ OpenRouter не нужен. Выделите не менее 4 ГБ ОЗУ; первый Docker build и загрузка модели Ollama требуют дополнительного места и доступа к сети.
+Основной сценарий не требует ключа или установленного Ollama: `make demo` сам поднимет Ollama в Docker. Нужны доступ к сети для первого Docker build/скачивания модели, **не менее 8 ГБ памяти, выделенной Docker**, и около 6 ГБ свободного места. На CPU локальная генерация заметно медленнее, чем на GPU.
 
 ### 1. Клонирование и настройка `.env`
 
@@ -84,31 +82,38 @@ cp .env.example .env
 uv run python -c "import secrets; print(secrets.token_urlsafe(48))"
 ```
 
-Вставьте напечатанное значение в `SANITIZER_HMAC_KEY=` в `.env`. Для основного demo также замените `OPENROUTER_API_KEY=replace-with-your-openrouter-api-key` на свой ключ. Остальные значения из `.env.example` подходят для встроенной синтетической базы и менять их не нужно.
+Вставьте напечатанное значение в `SANITIZER_HMAC_KEY=` в `.env`. Остальные значения из `.env.example` подходят для встроенной синтетической базы. `OLLAMA_MODEL=qwen3:4b` — модель основного demo; при необходимости замените её на другую модель из каталога Ollama прямо в `.env`, и `make demo` скачает её автоматически. Policy и `ollama pull` используют одно и то же значение.
 
-В PowerShell вместо `cp` можно использовать `Copy-Item .env.example .env`. Не коммитьте `.env`.
+`OPENROUTER_API_KEY` заполняйте **только** для необязательной команды `make demo-openrouter`; для `make demo`, `make test` и `make test-all` он не нужен. В PowerShell вместо `cp` используйте `Copy-Item .env.example .env`. Не коммитьте `.env`.
 
 ### 2. Выберите сценарий
 
 | Что проверить | Команда | Нужен ключ OpenRouter |
 |---|---|---|
 | Быстрые unit/security тесты | `make test` | Нет; Docker и `.env` тоже не нужны |
+| Основной полный локальный demo с Ollama | `make demo` | Нет |
 | Полная Docker integration-проверка | `make test-all` | Нет; нужен заполненный `.env` с HMAC-ключом |
-| Основной реальный demo | `make demo` | Да |
-| Полностью локальный demo | `make demo-ollama` | Нет |
+| Необязательный удалённый demo | `make demo-openrouter` | Да |
 
-`make test` не вызывает LLM и не запускает контейнеры. При первом запуске `uv` может скачать зависимости, поэтому для него всё же нужен доступ к package registry.
+`make test` не вызывает LLM и не запускает контейнеры. При первом запуске `uv` может скачать зависимости, поэтому ему нужен доступ к package registry.
 
-### 3. Основной demo с OpenRouter
+### 3. Основной локальный demo с Ollama
 
 ```bash
 make demo
 cat .runs/demo/report.md
 ```
 
-Команда поднимает две синтетические PostgreSQL базы, генерирует замены через OpenRouter и завершает работу только после обязательной верификации. Она отправляет запросы к внешнему provider и может расходовать баланс OpenRouter. Успешный отчёт содержит `Status: **passed**` и все проверки со статусом `pass`.
+`make demo` автоматически:
 
-> `make demo` сначала выполняет `make clean`: удаляет только локальные Docker volumes этого Compose-проекта и `.runs/`. Не используйте default policy/Makefile как команду для production-базы.
+1. очищает synthetic PostgreSQL базы и прошлые run-артефакты;
+2. запускает Ollama, source PostgreSQL и target PostgreSQL;
+3. скачивает модель из `OLLAMA_MODEL`, если её ещё нет в локальном cache;
+4. запускает `config/policy.demo.yaml` и выполняет обязательную верификацию.
+
+Успешный отчёт содержит `Status: **passed**` и все проверки со статусом `pass`. Первая загрузка модели может занять время; bootstrap и model pull автоматически повторяются до трёх раз при сетевой ошибке. Проверенный CPU-only запуск `qwen3:4b` обработал 236 mappings за ~55 минут; GPU существенно ускоряет этот этап. Нормальный `make clean` удаляет базы и `.runs/`, но сохраняет cache модели для повторного запуска; чтобы удалить и модель, выполните `make clean-ollama`.
+
+> Default policy/Makefile предназначены только для встроенной синтетической базы. Не используйте их как команду для production-базы.
 
 Артефакты запуска находятся в `.runs/demo/`:
 
@@ -117,16 +122,17 @@ state.sqlite3  mappings.sqlite3  greenmask.generated.yaml  mapper-config.json
 dump/  logs.jsonl  report.json  report.md  demo-before-after.md
 ```
 
-`demo-before-after.md` создаётся только для синтетической demo-базы.
+`demo-before-after.md` создаётся только для синтетической demo-базы. `make demo-ollama` оставлен как совместимый псевдоним и записывает результат в `.runs/demo-ollama/`.
 
-### 4. Локальный demo с Ollama
+### 4. Необязательный OpenRouter demo
 
 ```bash
-make demo-ollama
-cat .runs/demo-ollama/report.md
+# Сначала укажите действующий OPENROUTER_API_KEY в .env.
+make demo-openrouter
+cat .runs/demo-openrouter/report.md
 ```
 
-Команда запускает optional Compose-профиль `ollama`, однократно загружает `qwen3:4b` и применяет `config/policy.ollama.yaml`. Первая загрузка модели может занять время. Для другой модели измените `model` в этой policy и передайте то же имя в `make demo-ollama OLLAMA_MODEL=…`. Обычный `make demo` Ollama не поднимает.
+Этот сценарий использует `config/policy.openrouter.yaml`, не запускает Ollama и может расходовать баланс OpenRouter. Ключ можно создать в [OpenRouter Keys](https://openrouter.ai/keys).
 
 ### 5. Повторная верификация и resume
 
@@ -142,16 +148,17 @@ docker compose --env-file .env run --rm --no-deps sanitizer \
   run --policy config/policy.demo.yaml --run-id demo --resume
 ```
 
-`--resume` проверяет policy hash, schema fingerprint, provider/model и HMAC fingerprint. Для уже завершённого запуска используйте `verify`, а не `--resume`.
+Для OpenRouter замените policy на `config/policy.openrouter.yaml` и run ID на `demo-openrouter`. `--resume` проверяет policy hash, schema fingerprint, provider/model и HMAC fingerprint. Для завершённого запуска используйте `verify`, а не `--resume`.
 
 ### Если что-то пошло не так
 
 | Симптом | Действие |
 |---|---|
 | Ошибка про `SANITIZER_HMAC_KEY` | Сгенерируйте и вставьте непустой случайный ключ длиной не менее 32 байт. |
-| Ошибка про `OPENROUTER_API_KEY` | Укажите действующий ключ или используйте `make demo-ollama` / `make test-all`. |
+| Не загружается/не находится модель Ollama | Проверьте сеть, свободное место и `OLLAMA_MODEL` в `.env`; затем повторите `make demo`. |
+| Нужно заново скачать модель | Выполните `make clean-ollama`, затем `make demo`. |
+| Ошибка про `OPENROUTER_API_KEY` | Она относится только к `make demo-openrouter`: укажите ключ или вернитесь к `make demo`. |
 | Docker daemon недоступен | Запустите Docker Desktop и повторите команду. |
-| Нужно начать с нуля | Выполните `make clean`, затем выбранную команду снова. |
 | Нужны детали failed run | Откройте `.runs/<run-id>/report.md` и `.runs/<run-id>/logs.jsonl`; они не содержат raw PII. |
 
 ## Policy, registry и privacy
@@ -160,13 +167,13 @@ Policy явно перечисляет consistency groups и столбцы; с�
 
 ```yaml
 llm:
-  provider: openrouter
-  base_url_env: OPENROUTER_BASE_URL
-  api_key_env: OPENROUTER_API_KEY
-  model: deepseek/deepseek-v4-flash
+  provider: ollama
+  base_url_env: OLLAMA_BASE_URL
+  model: qwen3:4b
+  model_env: OLLAMA_MODEL
 ```
 
-У Ollama `api_key_env` не требуется. Шаблон: [templates/sanitizer-policy.example.yaml](templates/sanitizer-policy.example.yaml).
+`model_env` связывает policy с `.env`: это же имя передаётся в `ollama pull`. У Ollama `api_key_env` не требуется. OpenRouter policy находится в `config/policy.openrouter.yaml`. Шаблон: [templates/sanitizer-policy.example.yaml](templates/sanitizer-policy.example.yaml).
 
 Для каждой non-null строки registry хранит только `HMAC-SHA256(secret, group_id + "\0" + normalized_source)`, replacement, HMAC replacement и безопасные метаданные. Ограничения SQLite обеспечивают одно сопоставление на нормализованное исходное значение и уникальность replacement в группе. Партии назначаются атомарно.
 
@@ -198,7 +205,7 @@ make perf PERF_ROWS=1000000
 make clean
 ```
 
-Последний прогон `make test` дал **48 passed**. `make test-all` пересоздаёт test stack и проверяет fake workflow, resume и FK-regression в Docker.
+Последний прогон `make test` дал **49 passed**. `make test-all` пересоздаёт test stack и проверяет fake workflow, resume и FK-regression в Docker.
 
 ### Performance smoke
 
@@ -224,7 +231,7 @@ make clean
 
 ```text
 src/db_sanitizer/    policy, graph, postgres, mapping, llm, greenmask, verify, CLI
-config/              default OpenRouter и optional Ollama policy
+config/              default Ollama и optional OpenRouter policy
 demo/                синтетическая схема, seed и performance generator
 tests/               unit, security, Docker integration
 docs/                benchmark и архив исторических требований

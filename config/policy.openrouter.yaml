@@ -15,11 +15,12 @@ mapping:
   hmac_key_env: SANITIZER_HMAC_KEY
   hmac_algorithm: sha256
 
-# Optional local provider. The default policy.demo.yaml remains OpenRouter-backed.
+# Необязательный удалённый provider; основной demo использует config/policy.demo.yaml.
 llm:
-  provider: ollama
-  base_url_env: OLLAMA_BASE_URL
-  model: qwen3:4b
+  provider: openrouter
+  base_url_env: OPENROUTER_BASE_URL
+  api_key_env: OPENROUTER_API_KEY
+  model: deepseek/deepseek-v4-flash
   temperature: 1.15
   batch_size: 25
   max_retries: 3

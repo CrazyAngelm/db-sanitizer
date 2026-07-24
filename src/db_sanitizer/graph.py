@@ -99,7 +99,7 @@ class WorkflowContext:
 
     @property
     def llm_model_name(self) -> str:
-        return "test-fake" if self.uses_fake_provider else self.loaded.policy.llm.model
+        return "test-fake" if self.uses_fake_provider else self.runtime.provider_model
 
 
 def _run_metadata(context: WorkflowContext, schema_fingerprint: str) -> RunMetadata:
@@ -212,14 +212,14 @@ def _provider(context: WorkflowContext) -> ReplacementProvider:
         return OpenRouterProvider(
             base_url=base_url,
             api_key=api_key,
-            model=policy.llm.model,
+            model=context.runtime.provider_model,
             timeout_seconds=policy.llm.timeout_seconds,
             temperature=policy.llm.temperature,
         )
     if isinstance(policy.llm, OllamaLLMSettings):
         return OllamaProvider(
             base_url=base_url,
-            model=policy.llm.model,
+            model=context.runtime.provider_model,
             timeout_seconds=policy.llm.timeout_seconds,
             temperature=policy.llm.temperature,
         )

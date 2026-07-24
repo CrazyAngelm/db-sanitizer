@@ -16,6 +16,7 @@ def _environment() -> dict[str, str]:
         "OPENROUTER_BASE_URL": "https://openrouter.example/api/v1",
         "OPENROUTER_API_KEY": "test-key",
         "OLLAMA_BASE_URL": "http://ollama:11434",
+        "OLLAMA_MODEL": "qwen2.5:3b",
     }
 
 
@@ -29,17 +30,18 @@ def _context(tmp_path, policy_path: str) -> WorkflowContext:
     )
 
 
-def test_default_policy_selects_openrouter(tmp_path) -> None:
+def test_default_policy_selects_ollama_and_honors_model_env(tmp_path) -> None:
     provider = _provider(_context(tmp_path, "config/policy.demo.yaml"))
     try:
-        assert isinstance(provider, OpenRouterProvider)
+        assert isinstance(provider, OllamaProvider)
+        assert provider._model == "qwen2.5:3b"
     finally:
         provider.close()
 
 
-def test_optional_policy_selects_ollama(tmp_path) -> None:
-    provider = _provider(_context(tmp_path, "config/policy.ollama.yaml"))
+def test_optional_policy_selects_openrouter(tmp_path) -> None:
+    provider = _provider(_context(tmp_path, "config/policy.openrouter.yaml"))
     try:
-        assert isinstance(provider, OllamaProvider)
+        assert isinstance(provider, OpenRouterProvider)
     finally:
         provider.close()

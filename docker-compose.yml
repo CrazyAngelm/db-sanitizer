@@ -42,6 +42,7 @@ services:
       OPENROUTER_BASE_URL: ${OPENROUTER_BASE_URL:-https://openrouter.ai/api/v1}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3:4b}
     volumes:
       - ./.runs:/app/.runs
     depends_on:
@@ -50,7 +51,7 @@ services:
       target-db:
         condition: service_healthy
 
-  # Optional local LLM profile. It is never started by the default OpenRouter demo.
+  # Local LLM profile used by the default Ollama demo.
   ollama:
     image: ollama/ollama:0.11.0@sha256:c1bc4eb9ba010a710cc6998b0f3510e206c7c0c151ca898cd6f026c02472defc
     profiles: ["ollama"]
@@ -63,7 +64,7 @@ services:
       retries: 30
       start_period: 10s
 
-  # One-shot optional model download invoked only by make demo-ollama.
+  # One-shot model download invoked by make demo and make demo-ollama.
   ollama-pull:
     image: ollama/ollama:0.11.0@sha256:c1bc4eb9ba010a710cc6998b0f3510e206c7c0c151ca898cd6f026c02472defc
     profiles: ["ollama"]
@@ -89,6 +90,7 @@ services:
       OPENROUTER_BASE_URL: ${OPENROUTER_BASE_URL:-https://openrouter.ai/api/v1}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3:4b}
       DB_SANITIZER_RUN_INTEGRATION: "1"
     volumes:
       - ./.runs:/app/.runs
@@ -101,4 +103,7 @@ services:
 volumes:
   source-postgres-data:
   target-postgres-data:
+  # External so `make clean` resets databases but retains the downloaded local model.
   ollama-data:
+    external: true
+    name: db-sanitizer-ollama-data

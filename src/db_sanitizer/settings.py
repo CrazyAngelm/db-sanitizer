@@ -24,6 +24,7 @@ class RuntimeSettings:
     hmac_key: bytes
     provider_base_url: str | None
     provider_api_key: str | None
+    provider_model: str
 
     @property
     def hmac_key_fingerprint(self) -> str:
@@ -76,6 +77,8 @@ def resolve_runtime_settings(
     hmac_key_env: str,
     provider_base_url_env: str,
     provider_api_key_env: str | None,
+    provider_model: str,
+    provider_model_env: str | None,
     environment: Mapping[str, str] | None = None,
     require_provider_credentials: bool = True,
 ) -> RuntimeSettings:
@@ -105,6 +108,13 @@ def resolve_runtime_settings(
         if provider_api_key_env is not None:
             provider_api_key = env.get(provider_api_key_env) or None
 
+    configured_model = (
+        env.get(provider_model_env, "").strip() if provider_model_env is not None else ""
+    )
+    resolved_model = configured_model or provider_model
+    if not resolved_model or len(resolved_model) > 255:
+        raise PolicyError("LLM provider model is invalid")
+
     if len(hmac_key) < 32:
         raise PolicyError("SANITIZER_HMAC_KEY must contain at least 32 bytes")
     if source_and_target_are_equal(source_dsn, target_dsn):
@@ -116,4 +126,5 @@ def resolve_runtime_settings(
         hmac_key=hmac_key,
         provider_base_url=provider_base_url,
         provider_api_key=provider_api_key,
+        provider_model=resolved_model,
     )
