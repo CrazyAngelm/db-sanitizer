@@ -1,242 +1,130 @@
-# Архитектура
+# Архитектура DB Sanitizer
 
-## 1. Принцип
+## Назначение
 
-Система разделена на control plane и data plane.
+DB Sanitizer создаёт санитизированную копию PostgreSQL для разработки, тестирования и аналитики. Политика явно перечисляет чувствительные текстовые столбцы; инструмент не обнаруживает PII автоматически и не обрабатывает свободный текст или документы.
 
-- **Control plane** управляет шагами, состоянием, генерацией замен и проверками.
-- **Data plane** потоково читает БД, применяет готовые mappings и создаёт дамп.
+Главные инварианты:
 
-LLM не находится в горячем цикле обработки строк.
+- исходные PII не сохраняются в реестре, логах, состояниях LangGraph или отчётах;
+- LLM получает только тип сущности, локаль, число значений и ограничения формата;
+- одно нормализованное исходное значение внутри consistency group всегда получает одну замену;
+- отсутствие mapping, ошибка преобразования или обязательной проверки завершают запуск с ошибкой;
+- обработка строк и проверка сопоставлений используют ограниченные пакеты, а не полный набор строк в Python-памяти.
 
-## 2. Схема компонентов
+## Компоненты
 
 ```mermaid
 flowchart TD
-    CLI[CLI / Make] --> LG[LangGraph]
-    LG --> P[Policy validator]
-    LG --> I[PostgreSQL inspector]
-    I --> C[Distinct-key collector]
+    CLI[CLI / Make] --> LG[LangGraph StateGraph]
+    LG --> P[Валидация policy и схемы]
+    P --> C[Серверный сборщик уникальных ключей]
     C --> R[(SQLite mapping registry)]
-    LG --> A[Replacement generation agent]
-    A --> O[Local Ollama]
+    LG --> A[generate_replacements_agent]
+    A --> LP[ReplacementProvider]
+    LP --> OR[OpenRouter по умолчанию]
+    LP --> OL[Необязательный локальный Ollama]
     A --> R
-    LG --> B[Greenmask config builder]
-    B --> G[Greenmask dump]
-    S[(Source PostgreSQL)] --> G
-    G --> M[Long-lived JSONL mapper]
+    LG --> G[Конфигурация Greenmask]
+    S[(Исходный PostgreSQL)] --> GM[Greenmask]
+    GM --> M[Долгоживущий JSONL mapper]
     M --> R
-    M --> G
-    G --> D[(Sanitized logical dump)]
-    D --> T[(Target PostgreSQL)]
-    LG --> V[Verifier]
-    S --> V
+    GM --> D[(Санитизированная выгрузка)]
+    D --> T[(Целевой PostgreSQL)]
+    S --> V[Потоковый verifier]
     T --> V
     R --> V
     V --> REP[report.json / report.md]
 ```
 
-Исходник диаграммы отдельно лежит в `templates/architecture.mmd`.
+Исходник диаграммы: `templates/architecture.mmd`.
 
-## 3. Последовательность одного запуска
+## Плоскости выполнения
 
-```mermaid
-sequenceDiagram
-    participant U as User/CI
-    participant L as LangGraph
-    participant S as Source PostgreSQL
-    participant R as SQLite Registry
-    participant O as Ollama
-    participant G as Greenmask
-    participant T as Target PostgreSQL
+### Управляющая плоскость
 
-    U->>L: run(policy, run_id)
-    L->>S: inspect schema
-    L->>S: stream SELECT DISTINCT per configured column
-    L->>R: store group + HMAC keys
-    loop batches of missing mappings
-        L->>O: entity type + locale + count + constraints
-        O-->>L: structured synthetic values
-        L->>R: validate and store replacements
-    end
-    L->>G: validate generated config
-    G->>S: stream logical dump
-    G->>R: mapper lookups by HMAC
-    G-->>L: sanitized dump
-    L->>G: restore dump to target
-    G->>T: schema + sanitized rows
-    L->>S: verification reads
-    L->>T: verification reads
-    L->>R: expected mappings
-    L-->>U: reports and exit code
+LangGraph выполняет строго линейный граф:
+
+```text
+load_policy
+  -> inspect_schema
+  -> collect_mapping_keys
+  -> generate_replacements_agent
+  -> build_greenmask_config
+  -> dump_and_restore
+  -> verify_and_report
 ```
 
-## 4. Ответственность компонентов
+Только `generate_replacements_agent` владеет LLM. Состояние графа содержит только безопасные метаданные: идентификатор запуска, хеш policy, отпечаток схемы, агрегированные счётчики и пути артефактов. DSN, HMAC-ключи, исходные значения и ответы модели в него не попадают.
 
-### CLI
+### Плоскость данных
 
-- разбирает команды;
-- загружает env;
-- создаёт run directory;
-- запускает/возобновляет graph;
-- возвращает стабильный exit code.
+Greenmask потоково создаёт логическую выгрузку и для каждой настроенной строки вызывает долгоживущий JSONL mapper. Mapper повторяет нормализацию, вычисляет HMAC и выполняет lookup в SQLite. Он не импортирует и не вызывает LLM.
 
-### Policy validator
+## Провайдеры генерации
 
-- проверяет YAML и env;
-- выполняет schema-aware validation;
-- запрещает опасные/неподдержанные конфигурации до side effects.
+`ReplacementProvider` — узкая граница генерации замен.
 
-### PostgreSQL inspector
+| Provider | Роль | Выбор |
+|---|---|---|
+| OpenRouter `deepseek/deepseek-v4-flash` | Основной сценарий `make demo` | `config/policy.demo.yaml` |
+| Ollama | Необязательный локальный сценарий | `config/policy.ollama.yaml`, профиль Compose `ollama` |
+| DeterministicSyntheticProvider | Только тесты и performance smoke | Явно через factory или `DB_SANITIZER_USE_FAKE_PROVIDER=1` |
 
-- читает tables, columns, types, PK, FK, UNIQUE;
-- вычисляет schema fingerprint;
-- определяет ограничения длины групп;
-- не читает PII в логи/состояние.
+Оба реальных провайдера получают одинаковый безопасный контракт: `entity_type`, `locale`, `count`, описание формата, длины и регулярное выражение. Исходные строки, source HMAC, DSN, схему и секреты провайдер не получает.
 
-### Distinct-key collector
+## Реестр сопоставлений
 
-- читает только настроенные колонки;
-- использует server-side cursors;
-- сохраняет только HMAC keys;
-- дедуплицирует значения между таблицами группы.
+SQLite хранит:
 
-### Replacement generation agent
+- `group_id`;
+- HMAC нормализованного исходного значения;
+- синтетическую replacement;
+- HMAC нормализованной replacement;
+- безопасные метаданные запуска и агрегаты генерации.
 
-- единственный LLM-узел;
-- генерирует значения пакетами;
-- использует structured output;
-- валидирует и повторяет только недостающее;
-- не видит source values.
+Ограничения первичного и уникальных ключей обеспечивают взаимно однозначное сопоставление. Каждая принятая LLM-партия назначается транзакционно. При `--resume` уже назначенные строки не генерируются повторно.
 
-### Mapping registry
+Для verifier SQLite также предоставляет короткоживущую дисковую рабочую таблицу HMAC-счётчиков. Она очищается после каждой проверки и содержит только HMAC и количества, а не исходные значения.
 
-- обеспечивает one-to-one mapping;
-- делает повторы консистентными;
-- хранит состояние для resume;
-- блокирует duplicate replacements.
+## Масштабирование
 
-### Greenmask config builder
+### По числу строк
 
-- превращает policy в generated Greenmask YAML;
-- группирует колонки по таблицам;
-- настраивает один mapper process на таблицу;
-- не содержит бизнес-логики генерации.
+- collector использует именованный серверный курсор PostgreSQL и `fetchmany()` с ограниченным размером партии;
+- Greenmask и JSONL mapper обрабатывают строки потоково;
+- verifier использует именованные server-side cursors для построчных сравнений;
+- HMAC-пересечения и fallback-сравнение мультисетов используют дисковую рабочую таблицу SQLite вместо неограниченных Python `set` и `Counter`.
 
-### JSONL mapper
-
-- работает в строковом потоке Greenmask;
-- вычисляет HMAC и выполняет SQLite lookup;
-- не вызывает LLM;
-- fail closed при пропущенном mapping.
-
-### Verifier
-
-- доказывает, что результат пригоден;
-- отделён от data plane;
-- возвращает машинные check results и итоговый status.
-
-## 5. Почему ссылки сохраняются
-
-В демонстрации surrogate PK/FK (`customers.id`, `orders.customer_id`) не трансформируются, поэтому физические ссылки остаются неизменными.
-
-Дублирующие бизнес-поля (`billing_name`, `contact_email` и т. п.) входят в те же groups, что первичные поля, и получают те же replacements.
-
-Для чувствительного natural key policy validator требует перечислить и parent, и все referencing columns в одной group. В противном случае запуск запрещается до dump.
-
-## 6. Масштабирование
-
-### По количеству строк
-
-- Greenmask читает и преобразует потоково;
-- mapper хранит только соединение с SQLite и небольшой prepared cache;
-- collector использует server-side cursor;
-- row set не материализуется в Python.
+Память приложения ограничена настройками `collector_fetch_size` и `verifier_fetch_size`; PostgreSQL может использовать собственную память или временный диск для операций `ORDER BY`, `COUNT(DISTINCT)` и агрегатов.
 
 ### По числу уникальных PII
 
-- mappings персистентны на диске;
-- LLM вызывается только для уникальных незаполненных keys;
-- batch size настраивается;
-- generation можно resume;
-- ограничения и retries детерминированы.
+LLM вызывается только для отсутствующих уникальных ключей, а не для каждой строки. Реестр находится на диске. PoC не обещает мгновенную генерацию миллионов уникальных значений; для более крупных нагрузок генератор или реестр можно заменить, сохранив mapper contract.
 
-MVP не обещает мгновенную генерацию миллионов уникальных LLM-значений. Production extension может заменить SQLite на PostgreSQL/Redis и добавить генерацию больших проверенных synthetic pools, не меняя mapper contract.
+### Параллелизм Greenmask
 
-### По команде пользователей
+`greenmask.parallel_jobs` задаёт число jobs для dump/restore. Значение по умолчанию — `1` ради воспроизводимости; его можно повысить в policy после проверки пропускной способности локального хранилища и SQLite lookup.
 
-CLI/job не хранит глобальное mutable state. Каждый запуск имеет свой `run_id` и directory, поэтому его можно запускать из CI, Airflow, Jenkins, GitLab CI или другого scheduler.
+## Сохранение структуры
 
-## 7. Расширяемость
+PoC автоматически доказывает эквивалентность таблиц, столбцов, PostgreSQL-типов, ограничений длины, числа строк, `NULL`, PK, UNIQUE и FK, а также отсутствие orphan rows.
 
-### Новая СУБД
+Остальные PostgreSQL-объекты — `NOT NULL`, `DEFAULT`, identity-параметры, последовательности, `CHECK`, обычные индексы, действия `ON UPDATE`/`ON DELETE`, deferrability, views и triggers — переносятся стандартным Greenmask/pg_dump/pg_restore, но не входят в автоматическую доказательную проверку PoC.
 
-Добавляется новый `DatabaseAdapter` и data-plane adapter. Policy, groups, registry, LLM provider и verifier contracts остаются.
+## Надёжность и модель отказов
 
-### Новый тип данных
+- policy и схема проверяются до data-plane побочных эффектов;
+- source и target DSN не могут указывать на одну базу даже при разных ролях или URI-алиасах;
+- generated Greenmask config валидируется до dump;
+- mapper не имеет fallback к исходному значению;
+- отчёт всегда записывается перед fail-closed ошибкой обязательной проверки;
+- `--resume` проверяет policy hash, schema fingerprint, provider/model и HMAC fingerprint;
+- subprocess вызываются списком аргументов без shell interpolation, а потенциально чувствительный stdout/stderr Greenmask отбрасывается.
 
-Добавляется:
+## Компромиссы
 
-- normalization strategy;
-- Pydantic constraints;
-- prompt template;
-- validator.
-
-Core graph и mapper protocol не меняются.
-
-### Документы и файлы
-
-В будущем Greenmask adapter заменяется на `DocumentAdapter`, который выдаёт/принимает records. Consistency groups и mapping registry остаются общими.
-
-### Новый LLM provider
-
-Реализуется тот же provider interface. Agent node не должен зависеть от Ollama-specific response objects.
-
-## 8. Надёжность и failure model
-
-- каждый LangGraph node имеет чёткий side effect boundary;
-- checkpoint создаётся после успешного узла;
-- mappings сохраняются транзакционно после каждого batch;
-- generated config валидируется Greenmask до dump;
-- dump помечается готовым только после успешного завершения;
-- target считается готовым только после restore и required checks;
-- при любой required check failure exit code не равен нулю;
-- resume не разрешается при изменении policy/schema/model/secret fingerprint.
-
-## 9. Threat model для MVP
-
-Защищаем:
-
-- raw значения настроенных чувствительных столбцов;
-- credentials source/target;
-- HMAC secret;
-- mapping registry как чувствительный служебный артефакт.
-
-Основные угрозы:
-
-- PII в логах/exceptions;
-- PII в LLM prompts;
-- пропущенная колонка в policy;
-- missing mapping и тихое сохранение исходного значения;
-- нарушение UNIQUE/FK;
-- использование source и target одного DSN;
-- случайная публикация mapping DB.
-
-Меры:
-
-- explicit policy и schema validation;
-- fail closed;
-- redaction;
-- HMAC вместо raw source в registry;
-- local LLM;
-- automatic verifier;
-- run directory permissions;
-- README предупреждает, что completeness зависит от корректности policy.
-
-## 10. Компромиссы
-
-- Явная policy безопаснее и быстрее для тестового, но не находит неизвестные PII автоматически.
-- SQLite делает PoC простым, но не является общей высоконагруженной registry для множества параллельных jobs.
-- Локальная 4B-модель удобна для запуска, но качество замен ниже крупной модели.
-- Before/after разрешён только на synthetic demo, иначе сам отчёт мог бы стать утечкой.
-- Полное сохранение сложных статистических распределений не реализуется; one-to-one mapping сохраняет cardinality и повторы.
+- Явная policy безопаснее и предсказуемее auto-discovery, но требует полноты со стороны оператора.
+- SQLite подходит для одиночного PoC-запуска; это не общий реестр для множества параллельных writers.
+- OpenRouter является основным demo-provider по выбранной конфигурации; Ollama доступен для локального контура без изменения data-plane.
+- Before/after допускается только для синтетической demo-базы, иначе сам отчёт стал бы утечкой.

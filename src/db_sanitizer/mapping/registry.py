@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import os
 import sqlite3
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -71,7 +72,82 @@ CREATE TABLE IF NOT EXISTS generation_stats (
     rejected_items INTEGER NOT NULL DEFAULT 0,
     duration_seconds REAL NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS verification_hmac_work (
+    value_hmac TEXT PRIMARY KEY,
+    expected_count INTEGER NOT NULL DEFAULT 0,
+    actual_count INTEGER NOT NULL DEFAULT 0
+) WITHOUT ROWID;
 """
+
+
+class VerificationHmacAccumulator:
+    """Disk-backed exact HMAC multiset used only while verifying one scope."""
+
+    def __init__(self, registry: MappingRegistry, group_id: str) -> None:
+        self._registry = registry
+        self._group_id = group_id
+
+    def add_expected(self, hmacs: Iterable[str]) -> None:
+        self._add(hmacs, "expected_count")
+
+    def add_actual(self, hmacs: Iterable[str]) -> None:
+        self._add(hmacs, "actual_count")
+
+    def actual_distinct_count(self) -> int:
+        return self._count("SELECT COUNT(*) FROM verification_hmac_work WHERE actual_count > 0")
+
+    def source_intersection_count(self) -> int:
+        return self._count(
+            """
+            SELECT COUNT(*)
+            FROM verification_hmac_work AS work
+            WHERE work.actual_count > 0
+              AND EXISTS (
+                  SELECT 1
+                  FROM mappings
+                  WHERE mappings.group_id = ?
+                    AND mappings.source_hmac = work.value_hmac
+              )
+            """,
+            (self._group_id,),
+        )
+
+    def multiset_difference_count(self) -> int:
+        return self._count(
+            "SELECT COALESCE(SUM(ABS(expected_count - actual_count)), 0) "
+            "FROM verification_hmac_work"
+        )
+
+    def _add(self, hmacs: Iterable[str], count_column: str) -> None:
+        batch = tuple(hmacs)
+        if not batch:
+            return
+        for value_hmac in batch:
+            self._registry._validate_key(self._group_id, value_hmac)
+        try:
+            with self._registry._connection:
+                self._registry._connection.executemany(
+                    f"""
+                    INSERT INTO verification_hmac_work (value_hmac, {count_column}) VALUES (?, 1)
+                    ON CONFLICT(value_hmac) DO UPDATE
+                    SET {count_column} = {count_column} + excluded.{count_column}
+                    """,
+                    ((value_hmac,) for value_hmac in batch),
+                )
+        except sqlite3.Error as error:
+            raise RegistryError("unable to store verification HMAC work") from error
+
+    def _count(self, statement: str, parameters: Sequence[object] = ()) -> int:
+        try:
+            row = self._registry._connection.execute(statement, parameters).fetchone()
+            if row is None:
+                raise TypeError("verification HMAC aggregate did not return a row")
+            value = int(row[0])
+            if value < 0:
+                raise ValueError("verification HMAC aggregate is negative")
+            return value
+        except (TypeError, ValueError, sqlite3.Error) as error:
+            raise RegistryError("unable to read verification HMAC work") from error
 
 
 class MappingRegistry:
@@ -86,6 +162,8 @@ class MappingRegistry:
             os.chmod(self.path, 0o600)
             self._connection.execute("PRAGMA foreign_keys = ON")
             self._connection.execute("PRAGMA busy_timeout = 5000")
+            # Keep the SQLite page cache bounded; large verifier work spills to disk.
+            self._connection.execute("PRAGMA cache_size = -8192")
             self._connection.executescript(_SCHEMA)
         except (OSError, sqlite3.Error) as error:
             raise RegistryError("unable to initialize mapping registry") from error
@@ -353,19 +431,26 @@ class MappingRegistry:
         except sqlite3.Error as error:
             raise RegistryError("unable to count mappings") from error
 
-    def source_hmacs(self, group_id: str) -> set[str]:
-        """Return opaque source keys only; intended for verifier HMAC intersections."""
+    @contextmanager
+    def verification_hmac_accumulator(self, group_id: str) -> Iterator[VerificationHmacAccumulator]:
+        """Provide one cleaned disk-backed HMAC work scope for verifier scans."""
+
         if not isinstance(group_id, str) or not group_id:
             raise RegistryError("mapping group identifier must be a non-empty string")
         try:
-            return {
-                str(row[0])
-                for row in self._connection.execute(
-                    "SELECT source_hmac FROM mappings WHERE group_id = ?", (group_id,)
-                )
-            }
+            with self._connection:
+                self._connection.execute("DELETE FROM verification_hmac_work")
+            yield VerificationHmacAccumulator(self, group_id)
+        except RegistryError:
+            raise
         except sqlite3.Error as error:
-            raise RegistryError("unable to list mapping keys") from error
+            raise RegistryError("unable to prepare verification HMAC work") from error
+        finally:
+            try:
+                with self._connection:
+                    self._connection.execute("DELETE FROM verification_hmac_work")
+            except sqlite3.Error as error:
+                raise RegistryError("unable to clear verification HMAC work") from error
 
     def lookup(self, group_id: str, source_hmac: str) -> str | None:
         """Return a replacement or ``None``; callers must fail closed when absent."""

@@ -121,11 +121,19 @@ def build_greenmask_config(
             "storage": {"type": "directory", "directory": {"path": str(dump_dir.resolve())}},
             "log": {"level": "info", "format": "text"},
             "dump": {
-                "pg_dump_options": {"jobs": 1, "no-owner": True, "no-privileges": True},
+                "pg_dump_options": {
+                    "jobs": policy.greenmask.parallel_jobs,
+                    "no-owner": True,
+                    "no-privileges": True,
+                },
                 "transformation": transformations,
             },
             "restore": {
-                "pg_restore_options": {"jobs": 1, "no-owner": True, "no-privileges": True},
+                "pg_restore_options": {
+                    "jobs": policy.greenmask.parallel_jobs,
+                    "no-owner": True,
+                    "no-privileges": True,
+                },
             },
         }
         config_path.write_text(

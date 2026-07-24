@@ -10,6 +10,7 @@ from db_sanitizer.llm import (
     FakeProvider,
     GeneratedItem,
     GenerationResponse,
+    OllamaProvider,
     OpenRouterProvider,
     ReplacementGenerator,
 )
@@ -173,6 +174,39 @@ def test_openrouter_uses_api_key_and_json_schema_without_network() -> None:
     body = captured["body"]
     assert body["response_format"]["type"] == "json_schema"
     assert _generator_request.model_dump()["locale"] == "en-US"
+    client.close()
+
+
+def test_ollama_uses_schema_without_source_data_or_an_api_key() -> None:
+    captured: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["url"] = str(request.url)
+        captured["headers"] = dict(request.headers)
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={"message": {"content": '{"items":[{"value":"ada@example.test"}]}'}},
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    provider = OllamaProvider(
+        base_url="http://ollama.example:11434",
+        model="qwen3:4b",
+        client=client,
+    )
+    request = _generator_request_for_test()
+    response = provider.generate(request)
+
+    assert response.items[0].value == "ada@example.test"
+    assert captured["url"] == "http://ollama.example:11434/api/chat"
+    body = captured["body"]
+    assert body["stream"] is False
+    assert body["format"]["type"] == "object"
+    assert body["options"]["temperature"] == pytest.approx(1.15)
+    assert "authorization" not in captured["headers"]
+    request_text = json.dumps(body, ensure_ascii=False)
+    assert "RAW-PII-MUST-NOT-REACH-LLM" not in request_text
     client.close()
 
 

@@ -103,6 +103,39 @@ def test_valid_demo_policy_loads() -> None:
     assert loaded.policy.llm.provider == "openrouter"
 
 
+def test_optional_ollama_policy_loads_without_an_api_key() -> None:
+    loaded = load_policy("config/policy.ollama.yaml")
+    runtime = resolve_policy_runtime(
+        loaded,
+        {
+            "SOURCE_DATABASE_URL": "postgresql://source:password@source-db:5432/source",
+            "TARGET_DATABASE_URL": "postgresql://target:password@target-db:5432/target",
+            "SANITIZER_HMAC_KEY": "x" * 32,
+            "OLLAMA_BASE_URL": "http://ollama:11434",
+        },
+    )
+
+    assert loaded.policy.llm.provider == "ollama"
+    assert runtime.provider_base_url == "http://ollama:11434"
+    assert runtime.provider_api_key is None
+
+
+def test_fake_provider_mode_does_not_require_openrouter_credentials() -> None:
+    loaded = load_policy("config/policy.demo.yaml")
+    runtime = resolve_policy_runtime(
+        loaded,
+        {
+            "SOURCE_DATABASE_URL": "postgresql://source:password@source-db:5432/source",
+            "TARGET_DATABASE_URL": "postgresql://target:password@target-db:5432/target",
+            "SANITIZER_HMAC_KEY": "x" * 32,
+        },
+        require_provider_credentials=False,
+    )
+
+    assert runtime.provider_base_url is None
+    assert runtime.provider_api_key is None
+
+
 def test_policy_rejects_duplicate_column(tmp_path: Path) -> None:
     data = _policy_data()
     duplicate_group = deepcopy(data["groups"]["person_name"])

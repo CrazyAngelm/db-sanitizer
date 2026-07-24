@@ -1,22 +1,20 @@
 flowchart TD
-    CLI[CLI / Make] --> LG[LangGraph]
-    LG --> P[Policy validator]
-    LG --> I[PostgreSQL inspector]
-    I --> C[Distinct-key collector]
+    CLI[CLI / Make] --> LG[LangGraph StateGraph]
+    LG --> P[Policy + schema validator]
+    P --> C[Server-side distinct collector]
     C --> R[(SQLite mapping registry)]
-    LG --> A[Replacement generation agent]
-    A --> O[Local Ollama]
+    LG --> A[generate_replacements_agent]
+    A --> LLM[ReplacementProvider]
+    LLM --> OR[OpenRouter default]
+    LLM --> OL[Optional local Ollama]
     A --> R
-    LG --> B[Greenmask config builder]
-    B --> G[Greenmask dump]
-    S[(Source PostgreSQL)] --> G
-    G --> M[Long-lived JSONL mapper]
+    LG --> G[Generated Greenmask config]
+    S[(Source PostgreSQL)] --> GM[Greenmask dump]
+    GM --> M[Long-lived Cmd JSONL mapper]
     M --> R
-    M --> G
-    G --> D[(Sanitized logical dump)]
+    GM --> D[(Sanitized logical dump)]
     D --> T[(Target PostgreSQL)]
-    LG --> V[Verifier]
-    S --> V
+    S --> V[Streaming verifier]
     T --> V
     R --> V
     V --> REP[report.json / report.md]

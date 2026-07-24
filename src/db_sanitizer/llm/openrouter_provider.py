@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import secrets
 from typing import Any
 
@@ -11,7 +10,13 @@ from pydantic import ValidationError
 
 from db_sanitizer.errors import GenerationError
 
-from .models import GENERATION_RESPONSE_SCHEMA, GenerationRequest, GenerationResponse
+from .models import (
+    GENERATION_RESPONSE_SCHEMA,
+    SYSTEM_GENERATION_MESSAGE,
+    GenerationRequest,
+    GenerationResponse,
+    generation_prompt,
+)
 
 
 class OpenRouterProvider:
@@ -56,9 +61,7 @@ class OpenRouterProvider:
             "messages": [
                 {
                     "role": "system",
-                    "content": (
-                        "Generate only synthetic replacement values. Return the requested JSON."
-                    ),
+                    "content": SYSTEM_GENERATION_MESSAGE,
                 },
                 {"role": "user", "content": self._prompt(request)},
             ],
@@ -95,13 +98,4 @@ class OpenRouterProvider:
     @staticmethod
     def _prompt(request: GenerationRequest) -> str:
         """Serialize precisely the permitted group metadata, and nothing else."""
-        return json.dumps(
-            {
-                "entity_type": request.entity_type.value,
-                "locale": request.locale,
-                "constraints": request.constraints.model_dump(),
-                "count": request.count,
-            },
-            ensure_ascii=False,
-            separators=(",", ":"),
-        )
+        return generation_prompt(request)

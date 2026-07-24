@@ -129,6 +129,7 @@ class RunSettings(BaseModel):
     directory: Path = Path(".runs")
     allow_target_recreate: bool
     collector_fetch_size: Annotated[int, Field(ge=1, le=100_000)] = 1_000
+    verifier_fetch_size: Annotated[int, Field(ge=1, le=100_000)] = 1_000
 
 
 class ConnectionsSettings(BaseModel):
@@ -165,26 +166,51 @@ class MappingSettings(BaseModel):
         return value
 
 
-class LLMSettings(BaseModel):
-    """The explicit OpenRouter provider contract selected by the user."""
+class BaseLLMSettings(BaseModel):
+    """Shared, non-sensitive contract for a concrete replacement provider."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    provider: Literal["openrouter"]
     base_url_env: EnvironmentName
-    api_key_env: EnvironmentName
     model: Annotated[str, Field(min_length=1, max_length=255)]
+    temperature: Annotated[float, Field(ge=0, le=2)] = 1.15
     batch_size: Annotated[int, Field(ge=1, le=1_000)] = 25
     max_retries: Annotated[int, Field(ge=0, le=20)] = 3
     timeout_seconds: Annotated[int, Field(ge=1, le=3_600)] = 120
     structured_output: Literal[True] = True
 
-    @field_validator("base_url_env", "api_key_env")
+    @field_validator("base_url_env")
     @classmethod
-    def validate_env_name(cls, value: str) -> str:
+    def validate_base_url_env_name(cls, value: str) -> str:
         if not _ENV_NAME.fullmatch(value):
             raise ValueError("must be an uppercase environment variable name")
         return value
+
+
+class OpenRouterLLMSettings(BaseLLMSettings):
+    """Default remote provider selected explicitly by the demo policy."""
+
+    provider: Literal["openrouter"]
+    api_key_env: EnvironmentName
+
+    @field_validator("api_key_env")
+    @classmethod
+    def validate_api_key_env_name(cls, value: str) -> str:
+        if not _ENV_NAME.fullmatch(value):
+            raise ValueError("must be an uppercase environment variable name")
+        return value
+
+
+class OllamaLLMSettings(BaseLLMSettings):
+    """Optional local Ollama provider; it never needs an API key."""
+
+    provider: Literal["ollama"]
+
+
+LLMSettings = Annotated[
+    OpenRouterLLMSettings | OllamaLLMSettings,
+    Field(discriminator="provider"),
+]
 
 
 class GreenmaskSettings(BaseModel):
@@ -193,6 +219,7 @@ class GreenmaskSettings(BaseModel):
     binary: Annotated[str, Field(min_length=1, max_length=255)] = "greenmask"
     storage_dirname: Annotated[str, Field(min_length=1, max_length=255)] = "dump"
     mapper_timeout_seconds: Annotated[int, Field(ge=1, le=3_600)] = 60
+    parallel_jobs: Annotated[int, Field(ge=1, le=32)] = 1
     validate_output: bool = True
 
     @field_validator("storage_dirname")

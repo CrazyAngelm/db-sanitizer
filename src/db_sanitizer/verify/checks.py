@@ -9,15 +9,17 @@ from __future__ import annotations
 
 import math
 import re
-from collections import Counter
+from collections import Counter, OrderedDict
 from collections.abc import Iterator, Mapping, Sequence
-from contextlib import contextmanager, suppress
+from contextlib import contextmanager, nullcontext, suppress
 from dataclasses import dataclass, field
 from enum import StrEnum
+from itertools import count, zip_longest
 from types import MappingProxyType
 from typing import Literal
 
 from psycopg import Connection, sql
+from psycopg.rows import tuple_row
 
 from db_sanitizer.errors import VerificationError
 from db_sanitizer.mapping import HMACKey, MappingRegistry, NormalizationError, normalize
@@ -27,6 +29,8 @@ from db_sanitizer.postgres.inspector import ForeignKeyInfo, SchemaSnapshot
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]*$")
 _CHECK_ID = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 _DETAIL_KEY = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+_VERIFY_CURSOR_IDS = count()
+_MISSING = object()
 
 DetailValue = bool | int | float
 KeyKind = Literal["primary_key", "unique"]
@@ -183,6 +187,26 @@ class KeyConstraint:
     @property
     def signature(self) -> tuple[str, str, str, tuple[str, ...]]:
         return (self.kind, self.schema_name, self.table, self.columns)
+
+
+class _ReplacementLookupCache:
+    """Bound repeated registry lookups without retaining an unbounded key set."""
+
+    def __init__(self, registry: MappingRegistry, group_id: str, *, limit: int = 4_096) -> None:
+        self._registry = registry
+        self._group_id = group_id
+        self._limit = limit
+        self._values: OrderedDict[str, str | None] = OrderedDict()
+
+    def lookup(self, source_hmac: str) -> str | None:
+        try:
+            value = self._values.pop(source_hmac)
+        except KeyError:
+            value = self._registry.lookup(self._group_id, source_hmac)
+            if len(self._values) >= self._limit:
+                self._values.popitem(last=False)
+        self._values[source_hmac] = value
+        return value
 
 
 @dataclass(slots=True)
@@ -438,6 +462,8 @@ def check_primary_unique_constraints(
     policy: SanitizerPolicy,
     source_constraints: Sequence[KeyConstraint],
     target_constraints: Sequence[KeyConstraint],
+    *,
+    fetch_size: int = 1_000,
 ) -> CheckResult:
     """Verify PK/UNIQUE definitions, target key integrity, and stable surrogate PKs."""
 
@@ -471,7 +497,7 @@ def check_primary_unique_constraints(
             transformed_primary_keys += 1
             continue
         primary_keys_compared += 1
-        _, mismatches = _ordered_key_comparison(source, target, constraint)
+        _, mismatches = _ordered_key_comparison(source, target, constraint, fetch_size=fetch_size)
         primary_key_value_mismatches += mismatches
 
     passed = not any(
@@ -550,6 +576,8 @@ def check_configured_mappings(
     target_snapshot: SchemaSnapshot,
     source_constraints: Sequence[KeyConstraint],
     target_constraints: Sequence[KeyConstraint],
+    *,
+    fetch_size: int = 1_000,
 ) -> CheckResult:
     """Verify configured source-to-target replacements without emitting any values.
 
@@ -569,12 +597,16 @@ def check_configured_mappings(
         if constraint.kind == "primary_key"
     }
     metrics = _MappingMetrics()
+    lookup_caches: dict[str, _ReplacementLookupCache] = {}
 
     for group_id, group, ref in _configured_columns(policy):
         metrics.columns_checked += 1
         if source_snapshot.column_for(ref) is None or target_snapshot.column_for(ref) is None:
             metrics.unavailable_columns += 1
             continue
+        lookup_cache = lookup_caches.setdefault(
+            group_id, _ReplacementLookupCache(registry, group_id)
+        )
         primary_key = source_primary_keys.get((ref.schema_name, ref.table))
         if (
             primary_key is not None
@@ -593,6 +625,8 @@ def check_configured_mappings(
                 hmac_key=hmac_key,
                 primary_key=primary_key,
                 metrics=metrics,
+                lookup_cache=lookup_cache,
+                fetch_size=fetch_size,
             )
         else:
             metrics.aggregate_columns += 1
@@ -606,6 +640,8 @@ def check_configured_mappings(
                 registry=registry,
                 hmac_key=hmac_key,
                 metrics=metrics,
+                lookup_cache=lookup_cache,
+                fetch_size=fetch_size,
             )
 
     return CheckResult(
@@ -623,6 +659,8 @@ def check_source_target_hmac_nonintersection(
     registry: MappingRegistry,
     hmac_key: HMACKey,
     target_snapshot: SchemaSnapshot,
+    *,
+    fetch_size: int = 1_000,
 ) -> tuple[tuple[GroupHmacStats, ...], CheckResult]:
     """Ensure normalized target values never intersect opaque source keys."""
 
@@ -631,34 +669,37 @@ def check_source_target_hmac_nonintersection(
     invalid_values = 0
     unavailable_columns = 0
     for group_id, group in sorted(policy.groups.items()):
-        source_keys = registry.source_hmacs(group_id)
-        target_keys: set[str] = set()
-        intersections: set[str] = set()
         group_invalid = 0
         group_unavailable = 0
-        for ref in sorted(group.columns, key=lambda item: item.key):
-            if target_snapshot.column_for(ref) is None:
-                group_unavailable += 1
-                continue
-            for value in _iter_column_values(target, ref):
-                if value is None:
+        with registry.verification_hmac_accumulator(group_id) as accumulator:
+            batch: list[str] = []
+            for ref in sorted(group.columns, key=lambda item: item.key):
+                if target_snapshot.column_for(ref) is None:
+                    group_unavailable += 1
                     continue
-                normalized = _normalize_for_check(
-                    value,
-                    group.normalization.value,
-                    group.allow_empty,
-                )
-                if normalized is None:
-                    group_invalid += 1
-                    continue
-                target_hmac = hmac_key.digest(group_id, normalized)
-                target_keys.add(target_hmac)
-                if target_hmac in source_keys:
-                    intersections.add(target_hmac)
+                for value in _iter_column_values(target, ref, fetch_size=fetch_size):
+                    if value is None:
+                        continue
+                    normalized = _normalize_for_check(
+                        value,
+                        group.normalization.value,
+                        group.allow_empty,
+                    )
+                    if normalized is None:
+                        group_invalid += 1
+                        continue
+                    batch.append(hmac_key.digest(group_id, normalized))
+                    if len(batch) >= fetch_size:
+                        accumulator.add_actual(batch)
+                        batch.clear()
+            if batch:
+                accumulator.add_actual(batch)
+            target_distinct = accumulator.actual_distinct_count()
+            intersection_keys = accumulator.source_intersection_count()
         group_stat = GroupHmacStats(
             group_id=group_id,
-            target_distinct=len(target_keys),
-            intersection_keys=len(intersections),
+            target_distinct=target_distinct,
+            intersection_keys=intersection_keys,
             invalid_values=group_invalid,
             unavailable_columns=group_unavailable,
         )
@@ -779,6 +820,8 @@ def _ordered_key_comparison(
     source: Connection[object],
     target: Connection[object],
     constraint: KeyConstraint,
+    *,
+    fetch_size: int,
 ) -> tuple[int, int]:
     statement = _ordered_select_statement(
         schema_name=constraint.schema_name,
@@ -789,15 +832,15 @@ def _ordered_key_comparison(
     mismatches = 0
     try:
         with (
-            _executed_cursor(source, statement) as source_cursor,
-            _executed_cursor(target, statement) as target_cursor,
+            _executed_cursor(source, statement, fetch_size=fetch_size) as source_cursor,
+            _executed_cursor(target, statement, fetch_size=fetch_size) as target_cursor,
         ):
-            while True:
-                source_row = source_cursor.fetchone()
-                target_row = target_cursor.fetchone()
-                if source_row is None and target_row is None:
-                    break
-                if source_row is None or target_row is None:
+            for source_row, target_row in zip_longest(
+                _cursor_rows(source_cursor, fetch_size),
+                _cursor_rows(target_cursor, fetch_size),
+                fillvalue=_MISSING,
+            ):
+                if source_row is _MISSING or target_row is _MISSING:
                     mismatches += 1
                     continue
                 rows_checked += 1
@@ -885,6 +928,8 @@ def _check_mapping_by_primary_key(
     hmac_key: HMACKey,
     primary_key: KeyConstraint,
     metrics: _MappingMetrics,
+    lookup_cache: _ReplacementLookupCache,
+    fetch_size: int,
 ) -> None:
     statement = _ordered_select_statement(
         schema_name=ref.schema_name,
@@ -894,15 +939,15 @@ def _check_mapping_by_primary_key(
     )
     try:
         with (
-            _executed_cursor(source, statement) as source_cursor,
-            _executed_cursor(target, statement) as target_cursor,
+            _executed_cursor(source, statement, fetch_size=fetch_size) as source_cursor,
+            _executed_cursor(target, statement, fetch_size=fetch_size) as target_cursor,
         ):
-            while True:
-                source_row = source_cursor.fetchone()
-                target_row = target_cursor.fetchone()
-                if source_row is None and target_row is None:
-                    break
-                if source_row is None or target_row is None:
+            for source_row, target_row in zip_longest(
+                _cursor_rows(source_cursor, fetch_size),
+                _cursor_rows(target_cursor, fetch_size),
+                fillvalue=_MISSING,
+            ):
+                if source_row is _MISSING or target_row is _MISSING:
                     metrics.primary_key_mismatches += 1
                     continue
                 source_key, source_value = tuple(source_row[:-1]), source_row[-1]
@@ -920,6 +965,7 @@ def _check_mapping_by_primary_key(
                     registry=registry,
                     hmac_key=hmac_key,
                     metrics=metrics,
+                    lookup_cache=lookup_cache,
                 )
     except VerificationError:
         raise
@@ -938,42 +984,57 @@ def _check_mapping_aggregate(
     registry: MappingRegistry,
     hmac_key: HMACKey,
     metrics: _MappingMetrics,
+    lookup_cache: _ReplacementLookupCache,
+    fetch_size: int,
 ) -> None:
-    expected_target_hmacs: Counter[str] = Counter()
     source_nulls = 0
     target_nulls = 0
-    for source_value in _iter_column_values(source, ref):
-        metrics.rows_checked += 1
-        if source_value is None:
-            source_nulls += 1
-            continue
-        replacement = _expected_replacement(
-            source_value=source_value,
-            group_id=group_id,
-            normalization=normalization,
-            allow_empty=allow_empty,
-            registry=registry,
-            hmac_key=hmac_key,
-            metrics=metrics,
-        )
-        if replacement is not None:
-            # HMAC of the exact replacement is intentionally separate from the
-            # normalized source key: this detects a target text mutation too.
-            expected_target_hmacs[hmac_key.digest(group_id, replacement)] += 1
+    with registry.verification_hmac_accumulator(group_id) as accumulator:
+        expected_batch: list[str] = []
+        for source_value in _iter_column_values(source, ref, fetch_size=fetch_size):
+            metrics.rows_checked += 1
+            if source_value is None:
+                source_nulls += 1
+                continue
+            replacement = _expected_replacement(
+                source_value=source_value,
+                group_id=group_id,
+                normalization=normalization,
+                allow_empty=allow_empty,
+                registry=registry,
+                hmac_key=hmac_key,
+                metrics=metrics,
+                lookup_cache=lookup_cache,
+            )
+            if replacement is not None:
+                # HMAC of the exact replacement is intentionally separate from the
+                # normalized source key: this detects a target text mutation too.
+                expected_batch.append(hmac_key.digest(group_id, replacement))
+                if len(expected_batch) >= fetch_size:
+                    accumulator.add_expected(expected_batch)
+                    expected_batch.clear()
+        if expected_batch:
+            accumulator.add_expected(expected_batch)
 
-    actual_target_hmacs: Counter[str] = Counter()
-    for target_value in _iter_column_values(target, ref):
-        if target_value is None:
-            target_nulls += 1
-            continue
-        if not isinstance(target_value, str):
-            metrics.invalid_target_values += 1
-            continue
-        actual_target_hmacs[hmac_key.digest(group_id, target_value)] += 1
+        actual_batch: list[str] = []
+        for target_value in _iter_column_values(target, ref, fetch_size=fetch_size):
+            if target_value is None:
+                target_nulls += 1
+                continue
+            if not isinstance(target_value, str):
+                metrics.invalid_target_values += 1
+                continue
+            actual_batch.append(hmac_key.digest(group_id, target_value))
+            if len(actual_batch) >= fetch_size:
+                accumulator.add_actual(actual_batch)
+                actual_batch.clear()
+        if actual_batch:
+            accumulator.add_actual(actual_batch)
+
+        mapping_mismatches = accumulator.multiset_difference_count()
 
     metrics.null_mismatches += abs(source_nulls - target_nulls)
-    metrics.mapping_mismatches += sum((expected_target_hmacs - actual_target_hmacs).values())
-    metrics.mapping_mismatches += sum((actual_target_hmacs - expected_target_hmacs).values())
+    metrics.mapping_mismatches += mapping_mismatches
 
 
 def _compare_mapping_values(
@@ -986,6 +1047,7 @@ def _compare_mapping_values(
     registry: MappingRegistry,
     hmac_key: HMACKey,
     metrics: _MappingMetrics,
+    lookup_cache: _ReplacementLookupCache,
 ) -> None:
     if source_value is None:
         if target_value is not None:
@@ -999,6 +1061,7 @@ def _compare_mapping_values(
         registry=registry,
         hmac_key=hmac_key,
         metrics=metrics,
+        lookup_cache=lookup_cache,
     )
     if replacement is None:
         return
@@ -1023,12 +1086,13 @@ def _expected_replacement(
     registry: MappingRegistry,
     hmac_key: HMACKey,
     metrics: _MappingMetrics,
+    lookup_cache: _ReplacementLookupCache,
 ) -> str | None:
     normalized = _normalize_for_check(source_value, normalization, allow_empty)
     if normalized is None:
         metrics.invalid_source_values += 1
         return None
-    replacement = registry.lookup(group_id, hmac_key.digest(group_id, normalized))
+    replacement = lookup_cache.lookup(hmac_key.digest(group_id, normalized))
     if not isinstance(replacement, str) or not replacement:
         metrics.missing_mappings += 1
         return None
@@ -1073,30 +1137,54 @@ def _ordered_select_statement(
 
 
 @contextmanager
-def _executed_cursor(connection: Connection[object], statement: object) -> Iterator[object]:
+def _executed_cursor(
+    connection: Connection[object], statement: object, *, fetch_size: int
+) -> Iterator[object]:
+    """Open a named, bounded server cursor for row-wise verification work."""
+
+    if fetch_size < 1:
+        raise VerificationError("verification fetch size must be positive")
+    transaction = connection.transaction() if connection.autocommit else nullcontext()
+    cursor: object | None = None
     try:
-        cursor = connection.cursor()
-        cursor.execute(statement)
+        with transaction:
+            cursor = connection.cursor(
+                name=f"sanitizer_verify_{next(_VERIFY_CURSOR_IDS)}",
+                row_factory=tuple_row,
+                # Target verification connections use autocommit; hold the cursor
+                # for the explicit transaction opened above.
+                withhold=connection.autocommit,
+            )
+            cursor.itersize = fetch_size  # type: ignore[attr-defined]
+            cursor.execute(statement)  # type: ignore[attr-defined]
+            try:
+                yield cursor
+            finally:
+                with suppress(Exception):
+                    cursor.close()  # type: ignore[attr-defined]
+    except VerificationError:
+        raise
     except Exception:
-        raise VerificationError("unable to execute verification query") from None
-    try:
-        yield cursor
-    finally:
-        with suppress(Exception):
-            cursor.close()
+        raise VerificationError("unable to execute streaming verification query") from None
 
 
-def _iter_column_values(connection: Connection[object], ref: ColumnRef) -> Iterator[object]:
+def _cursor_rows(cursor: object, fetch_size: int) -> Iterator[object]:
+    """Yield bounded fetch batches without materializing a complete result set."""
+
+    while rows := cursor.fetchmany(fetch_size):  # type: ignore[attr-defined]
+        yield from rows
+
+
+def _iter_column_values(
+    connection: Connection[object], ref: ColumnRef, *, fetch_size: int
+) -> Iterator[object]:
     statement = sql.SQL("SELECT {column} FROM {table}").format(
         column=sql.Identifier(ref.column),
         table=_ref_table_identifier(ref),
     )
     try:
-        with _executed_cursor(connection, statement) as cursor:
-            while True:
-                row = cursor.fetchone()  # type: ignore[attr-defined]
-                if row is None:
-                    return
+        with _executed_cursor(connection, statement, fetch_size=fetch_size) as cursor:
+            for row in _cursor_rows(cursor, fetch_size):
                 yield row[0]
     except VerificationError:
         raise

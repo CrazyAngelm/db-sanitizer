@@ -1,9 +1,11 @@
+# Policy OpenRouter по умолчанию. Для необязательного локального пути используйте config/policy.ollama.yaml.
 version: 1
 
 run:
   directory: .runs
   allow_target_recreate: true
   collector_fetch_size: 1000
+  verifier_fetch_size: 1000
 
 connections:
   source_dsn_env: SOURCE_DATABASE_URL
@@ -15,19 +17,22 @@ mapping:
   hmac_algorithm: sha256
 
 llm:
-  provider: ollama
-  base_url_env: OLLAMA_BASE_URL
-  model: qwen3:4b-instruct
+  provider: openrouter
+  base_url_env: OPENROUTER_BASE_URL
+  api_key_env: OPENROUTER_API_KEY
+  model: deepseek/deepseek-v4-flash
+  temperature: 1.15
   batch_size: 25
   max_retries: 3
   timeout_seconds: 120
   structured_output: true
 
-# Реализация должна закрепить Greenmask 0.2.22.
+# Greenmask is pinned to 0.2.22 by Docker image and runner validation.
 greenmask:
   binary: greenmask
   storage_dirname: dump
   mapper_timeout_seconds: 60
+  parallel_jobs: 1
   validate_output: true
 
 groups:

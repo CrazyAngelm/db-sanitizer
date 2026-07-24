@@ -13,7 +13,7 @@ import yaml
 from pydantic import ValidationError
 
 from db_sanitizer.errors import PolicyError
-from db_sanitizer.policy.models import SanitizerPolicy
+from db_sanitizer.policy.models import OpenRouterLLMSettings, SanitizerPolicy
 from db_sanitizer.settings import RuntimeSettings, resolve_runtime_settings
 
 
@@ -56,15 +56,19 @@ def load_policy(path: str | Path) -> LoadedPolicy:
 def resolve_policy_runtime(
     loaded: LoadedPolicy,
     environment: Mapping[str, str] | None = None,
+    *,
+    require_provider_credentials: bool = True,
 ) -> RuntimeSettings:
     """Resolve runtime credentials only immediately before a run starts."""
 
     policy = loaded.policy
+    api_key_env = policy.llm.api_key_env if isinstance(policy.llm, OpenRouterLLMSettings) else None
     return resolve_runtime_settings(
         source_dsn_env=policy.connections.source_dsn_env,
         target_dsn_env=policy.connections.target_dsn_env,
         hmac_key_env=policy.mapping.hmac_key_env,
         provider_base_url_env=policy.llm.base_url_env,
-        provider_api_key_env=policy.llm.api_key_env,
+        provider_api_key_env=api_key_env,
         environment=os.environ if environment is None else environment,
+        require_provider_credentials=require_provider_credentials,
     )

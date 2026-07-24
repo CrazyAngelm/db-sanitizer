@@ -1,0 +1,26 @@
+{
+  "distinct_mappings": 400,
+  "dump_transform_rows_per_second": 3979.8365356729278,
+  "environment": {
+    "machine": "AMD64",
+    "platform": "Windows-11-10.0.26200-SP0",
+    "processor": "Intel64 Family 6 Model 170 Stepping 4, GenuineIntel",
+    "python": "3.12.13"
+  },
+  "llm_accepted_items": 400,
+  "llm_items_equal_distinct_mappings": true,
+  "model": "test-fake",
+  "peak_rss_bytes": 91779072,
+  "provider": "fake",
+  "requested_rows": 1000000,
+  "run_id": "perf-1000000",
+  "schema_version": "1.0",
+  "timings_seconds": {
+    "collect": 1.186802,
+    "dump_transform": 376.92502859199885,
+    "llm": 6.559419229015475,
+    "restore": 2.72418590199959,
+    "verify": 88.250946
+  },
+  "total_rows": 1500100
+}

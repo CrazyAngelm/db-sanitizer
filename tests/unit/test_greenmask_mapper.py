@@ -132,4 +132,6 @@ def test_generated_greenmask_config_is_secret_free_and_groups_columns(tmp_path) 
         "public.support_tickets",
     }
     assert len(yaml_payload["dump"]["transformation"]) == 3
+    assert yaml_payload["dump"]["pg_dump_options"]["jobs"] == policy.greenmask.parallel_jobs
+    assert yaml_payload["restore"]["pg_restore_options"]["jobs"] == policy.greenmask.parallel_jobs
     assert yaml_payload["dump"]["transformation"][0]["transformers"][0]["name"] == "Cmd"

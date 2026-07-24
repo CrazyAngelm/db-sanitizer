@@ -131,6 +131,7 @@ def verify_connections(
                 policy=policy,
                 source_constraints=source_constraints,
                 target_constraints=target_constraints,
+                fetch_size=policy.run.verifier_fetch_size,
             )
         )
         checks.append(
@@ -144,6 +145,7 @@ def verify_connections(
                 target_snapshot=target_schema,
                 source_constraints=source_constraints,
                 target_constraints=target_constraints,
+                fetch_size=policy.run.verifier_fetch_size,
             )
         )
         group_hmac_stats, hmac_check = check_source_target_hmac_nonintersection(
@@ -152,6 +154,7 @@ def verify_connections(
             registry=registry,
             hmac_key=hmac_key,
             target_snapshot=target_schema,
+            fetch_size=policy.run.verifier_fetch_size,
         )
         checks.extend((hmac_check, check_no_single_placeholder(column_stats)))
 
@@ -277,13 +280,13 @@ def _group_reports(
     for group_id, group in sorted(policy.groups.items()):
         stats = columns_by_group.get(group_id, [])
         hmac_stats = hmac_by_group.get(group_id)
-        source_hmacs = registry.source_hmacs(group_id)
+        mapping_count = registry.mapping_count(group_id)
         reports.append(
             GroupReport(
                 id=group_id,
                 entity_type=group.entity_type,
-                mapping_count=registry.mapping_count(group_id),
-                distinct_source=len(source_hmacs),
+                mapping_count=mapping_count,
+                distinct_source=mapping_count,
                 distinct_target=0 if hmac_stats is None else hmac_stats.target_distinct,
                 nulls_source=sum(item.source_nulls for item in stats),
                 nulls_target=sum(item.target_nulls for item in stats),

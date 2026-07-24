@@ -12,6 +12,7 @@ COPY --from=python-runtime /usr/local /usr/local
 COPY --from=uv-runtime /uv /uvx /bin/
 
 ENV PATH="/app/.venv/bin:/usr/local/bin:${PATH}" \
+    PYTHONPATH="/app/src" \
     PYTHONUNBUFFERED=1 \
     LANGGRAPH_STRICT_MSGPACK=true \
     UV_COMPILE_BYTECODE=1 \
@@ -26,7 +27,23 @@ COPY src ./src
 COPY config ./config
 COPY demo ./demo
 COPY templates/run-report.schema.json ./templates/run-report.schema.json
-RUN uv sync --frozen --no-dev && mkdir -p /app/.runs && chown -R greenmask:greenmask /app
+RUN uv sync --frozen --no-dev --no-install-project \
+    && mkdir -p /app/.runs \
+    && chown -R greenmask:greenmask /app
 
 USER greenmask
-ENTRYPOINT ["db-sanitizer"]
+ENTRYPOINT ["python", "-m", "db_sanitizer.cli"]
+
+# Development-only target used by make test-integration/test-all. It never ships
+# in the default sanitizer runtime image.
+FROM runtime AS test-runtime
+
+USER root
+COPY tests ./tests
+RUN uv sync --frozen --group dev --no-install-project && chown -R greenmask:greenmask /app
+
+USER greenmask
+ENTRYPOINT ["python", "-m", "pytest", "tests/integration", "-q"]
+
+# Keep the production image as Docker's default target as well.
+FROM runtime AS final

@@ -34,12 +34,62 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      target: runtime
     environment:
       SOURCE_DATABASE_URL: ${SOURCE_DATABASE_URL:?set SOURCE_DATABASE_URL in .env}
       TARGET_DATABASE_URL: ${TARGET_DATABASE_URL:?set TARGET_DATABASE_URL in .env}
       SANITIZER_HMAC_KEY: ${SANITIZER_HMAC_KEY:?set SANITIZER_HMAC_KEY in .env}
-      OPENROUTER_BASE_URL: ${OPENROUTER_BASE_URL:?set OPENROUTER_BASE_URL in .env}
-      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:?set OPENROUTER_API_KEY in .env}
+      OPENROUTER_BASE_URL: ${OPENROUTER_BASE_URL:-https://openrouter.ai/api/v1}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+    volumes:
+      - ./.runs:/app/.runs
+    depends_on:
+      source-db:
+        condition: service_healthy
+      target-db:
+        condition: service_healthy
+
+  # Optional local LLM profile. It is never started by the default OpenRouter demo.
+  ollama:
+    image: ollama/ollama:0.11.0@sha256:c1bc4eb9ba010a710cc6998b0f3510e206c7c0c151ca898cd6f026c02472defc
+    profiles: ["ollama"]
+    volumes:
+      - ollama-data:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+
+  # One-shot optional model download invoked only by make demo-ollama.
+  ollama-pull:
+    image: ollama/ollama:0.11.0@sha256:c1bc4eb9ba010a710cc6998b0f3510e206c7c0c151ca898cd6f026c02472defc
+    profiles: ["ollama"]
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    entrypoint: ["ollama"]
+    command: ["pull", "${OLLAMA_MODEL:-qwen3:4b}"]
+    depends_on:
+      ollama:
+        condition: service_healthy
+
+  # A dev-only image target keeps the default runtime small and test-free.
+  sanitizer-test:
+    profiles: ["test"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: test-runtime
+    environment:
+      SOURCE_DATABASE_URL: ${SOURCE_DATABASE_URL:?set SOURCE_DATABASE_URL in .env}
+      TARGET_DATABASE_URL: ${TARGET_DATABASE_URL:?set TARGET_DATABASE_URL in .env}
+      SANITIZER_HMAC_KEY: ${SANITIZER_HMAC_KEY:?set SANITIZER_HMAC_KEY in .env}
+      OPENROUTER_BASE_URL: ${OPENROUTER_BASE_URL:-https://openrouter.ai/api/v1}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+      DB_SANITIZER_RUN_INTEGRATION: "1"
     volumes:
       - ./.runs:/app/.runs
     depends_on:
@@ -51,3 +101,4 @@ services:
 volumes:
   source-postgres-data:
   target-postgres-data:
+  ollama-data:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -37,3 +38,20 @@ class GenerationResponse(BaseModel):
 
 
 GENERATION_RESPONSE_SCHEMA = GenerationResponse.model_json_schema()
+
+SYSTEM_GENERATION_MESSAGE = "Generate only synthetic replacement values. Return the requested JSON."
+
+
+def generation_prompt(request: GenerationRequest) -> str:
+    """Serialize only the non-sensitive provider input contract."""
+
+    return json.dumps(
+        {
+            "entity_type": request.entity_type.value,
+            "locale": request.locale,
+            "constraints": request.constraints.model_dump(),
+            "count": request.count,
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )

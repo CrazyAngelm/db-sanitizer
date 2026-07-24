@@ -24,12 +24,14 @@ from db_sanitizer.errors import GenerationError, PolicyError
 from db_sanitizer.greenmask import GeneratedGreenmaskConfig, GreenmaskRunner, build_greenmask_config
 from db_sanitizer.llm import (
     DeterministicSyntheticProvider,
+    OllamaProvider,
     OpenRouterProvider,
     ReplacementGenerator,
     ReplacementProvider,
 )
 from db_sanitizer.mapping import HMACKey, MappingRegistry, RunMetadata
 from db_sanitizer.policy.loader import LoadedPolicy, load_policy, resolve_policy_runtime
+from db_sanitizer.policy.models import OllamaLLMSettings, OpenRouterLLMSettings
 from db_sanitizer.policy.validator import validate_policy_against_schema, validate_run_directory
 from db_sanitizer.postgres import (
     collect_mapping_keys,
@@ -77,6 +79,7 @@ class WorkflowContext:
     run_dir: Path
     logger: JsonlLogger
     provider_factory: Callable[[], ReplacementProvider] | None = None
+    fake_provider_enabled: bool = False
 
     @property
     def registry_path(self) -> Path:
@@ -88,10 +91,7 @@ class WorkflowContext:
 
     @property
     def uses_fake_provider(self) -> bool:
-        return (
-            self.provider_factory is not None
-            or os.environ.get("DB_SANITIZER_USE_FAKE_PROVIDER") == "1"
-        )
+        return self.provider_factory is not None or self.fake_provider_enabled
 
     @property
     def llm_provider_name(self) -> str:
@@ -167,9 +167,23 @@ def _create_context(
     resume: bool,
     provider_factory: Callable[[], ReplacementProvider] | None,
     environment: Mapping[str, str] | None,
+    require_provider_credentials: bool | None = None,
 ) -> WorkflowContext:
     loaded = load_policy(policy_path)
-    runtime = resolve_policy_runtime(loaded, environment)
+    resolved_environment = os.environ if environment is None else environment
+    fake_provider_enabled = (
+        provider_factory is not None
+        or resolved_environment.get("DB_SANITIZER_USE_FAKE_PROVIDER") == "1"
+    )
+    runtime = resolve_policy_runtime(
+        loaded,
+        environment,
+        require_provider_credentials=(
+            not fake_provider_enabled
+            if require_provider_credentials is None
+            else require_provider_credentials
+        ),
+    )
     run_dir = _prepare_run_directory(loaded, run_id, resume=resume)
     logger = JsonlLogger(path=run_dir / "logs.jsonl", run_id=run_id)
     return WorkflowContext(
@@ -178,6 +192,7 @@ def _create_context(
         run_dir=run_dir,
         logger=logger,
         provider_factory=provider_factory,
+        fake_provider_enabled=fake_provider_enabled,
     )
 
 
@@ -187,12 +202,28 @@ def _provider(context: WorkflowContext) -> ReplacementProvider:
     if context.uses_fake_provider:
         return DeterministicSyntheticProvider()
     policy = context.loaded.policy
-    return OpenRouterProvider(
-        base_url=context.runtime.provider_base_url,
-        api_key=context.runtime.provider_api_key,
-        model=policy.llm.model,
-        timeout_seconds=policy.llm.timeout_seconds,
-    )
+    base_url = context.runtime.provider_base_url
+    if base_url is None:
+        raise PolicyError("LLM provider base URL is not configured")
+    if isinstance(policy.llm, OpenRouterLLMSettings):
+        api_key = context.runtime.provider_api_key
+        if api_key is None:
+            raise PolicyError("OpenRouter API key is not configured")
+        return OpenRouterProvider(
+            base_url=base_url,
+            api_key=api_key,
+            model=policy.llm.model,
+            timeout_seconds=policy.llm.timeout_seconds,
+            temperature=policy.llm.temperature,
+        )
+    if isinstance(policy.llm, OllamaLLMSettings):
+        return OllamaProvider(
+            base_url=base_url,
+            model=policy.llm.model,
+            timeout_seconds=policy.llm.timeout_seconds,
+            temperature=policy.llm.temperature,
+        )
+    raise PolicyError("configured LLM provider is unsupported")
 
 
 def _close_provider(provider: ReplacementProvider) -> None:
@@ -678,6 +709,7 @@ def verify_existing_run(
         resume=True,
         provider_factory=None,
         environment=environment,
+        require_provider_credentials=False,
     )
     with _open_checkpointer(context.state_path) as checkpointer:
         state = _checkpoint_state(checkpointer, run_id)

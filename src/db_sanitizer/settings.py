@@ -22,8 +22,8 @@ class RuntimeSettings:
     source_dsn: str
     target_dsn: str
     hmac_key: bytes
-    provider_base_url: str
-    provider_api_key: str
+    provider_base_url: str | None
+    provider_api_key: str | None
 
     @property
     def hmac_key_fingerprint(self) -> str:
@@ -75,24 +75,40 @@ def resolve_runtime_settings(
     target_dsn_env: str,
     hmac_key_env: str,
     provider_base_url_env: str,
-    provider_api_key_env: str,
+    provider_api_key_env: str | None,
     environment: Mapping[str, str] | None = None,
+    require_provider_credentials: bool = True,
 ) -> RuntimeSettings:
-    """Resolve and validate runtime values declared by a policy."""
+    """Resolve runtime values without serializing credentials into run state.
+
+    An explicitly selected fake provider is allowed to bypass provider endpoint
+    credentials for offline tests. Database DSNs and the HMAC key are never
+    optional, even in that mode.
+    """
 
     env = os.environ if environment is None else environment
     source_dsn = require_environment(source_dsn_env, env)
     target_dsn = require_environment(target_dsn_env, env)
     hmac_key = require_environment(hmac_key_env, env).encode("utf-8")
-    provider_base_url = require_environment(provider_base_url_env, env).rstrip("/")
-    provider_api_key = require_environment(provider_api_key_env, env)
+    provider_base_url: str | None = None
+    provider_api_key: str | None = None
+
+    if require_provider_credentials:
+        provider_base_url = require_environment(provider_base_url_env, env).rstrip("/")
+        if provider_api_key_env is not None:
+            provider_api_key = require_environment(provider_api_key_env, env)
+        if not provider_base_url.startswith(("http://", "https://")):
+            raise PolicyError("LLM provider base URL must be an http(s) URL")
+    else:
+        configured_base_url = env.get(provider_base_url_env, "").strip().rstrip("/")
+        provider_base_url = configured_base_url or None
+        if provider_api_key_env is not None:
+            provider_api_key = env.get(provider_api_key_env) or None
 
     if len(hmac_key) < 32:
         raise PolicyError("SANITIZER_HMAC_KEY must contain at least 32 bytes")
     if source_and_target_are_equal(source_dsn, target_dsn):
         raise PolicyError("source and target database DSNs must identify different databases")
-    if not provider_base_url.startswith(("http://", "https://")):
-        raise PolicyError("LLM provider base URL must be an http(s) URL")
 
     return RuntimeSettings(
         source_dsn=source_dsn,

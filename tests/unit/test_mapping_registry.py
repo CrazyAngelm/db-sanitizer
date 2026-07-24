@@ -115,6 +115,28 @@ def test_registry_persists_safe_generation_statistics(tmp_path) -> None:
         assert registry.generation_stats() == (3, 7, 3, 2.0)
 
 
+def test_registry_verification_accumulator_is_exact_and_cleared(tmp_path) -> None:
+    key = HMACKey(_SECRET)
+    first = key.digest("email", "first@example.test")
+    second = key.digest("email", "second@example.test")
+    extra = key.digest("email", "extra@example.test")
+
+    with MappingRegistry(tmp_path / "mappings.sqlite3") as registry:
+        registry.initialize(_metadata())
+        registry.insert_source_keys("email", [first, second])
+        with registry.verification_hmac_accumulator("email") as accumulator:
+            accumulator.add_expected([first, first, second])
+            accumulator.add_actual([first, extra])
+
+            assert accumulator.actual_distinct_count() == 2
+            assert accumulator.source_intersection_count() == 1
+            assert accumulator.multiset_difference_count() == 3
+
+        with registry.verification_hmac_accumulator("email") as accumulator:
+            assert accumulator.actual_distinct_count() == 0
+            assert accumulator.multiset_difference_count() == 0
+
+
 def test_registry_checks_resume_metadata_and_never_stores_raw_source(tmp_path) -> None:
     source = "RAW-PII-MUST-NOT-REACH-SQLITE"
     key = HMACKey(_SECRET)
