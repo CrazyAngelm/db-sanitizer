@@ -7,7 +7,7 @@
 - Полный путь: source PostgreSQL → HMAC registry → LLM → Greenmask Cmd JSONL mapper → target PostgreSQL → обязательная верификация и отчёт.
 - Основной demo-provider: OpenRouter `deepseek/deepseek-v4-flash`.
 - Необязательный локальный provider: Ollama через `config/policy.ollama.yaml` и Compose-профиль `ollama`.
-- Тесты не требуют модели или интернета; OpenRouter вызывается только `make demo`.
+- Тесты не вызывают модель или OpenRouter; Docker нужен только для integration-сценария `make test-all`.
 - Зафиксированы PostgreSQL 16.14, Greenmask `v0.2.22`, Python 3.12.13, LangGraph 1.2.9, psycopg 3.3.4 и Pydantic 2.13.4.
 
 OpenRouter выбран пользователем для основного сценария. Он получает только нечувствительные метаданные генерации. Ollama реализован для локального изолированного запуска и не запускается без явной команды.
@@ -61,44 +61,98 @@ load_policy -> inspect_schema -> collect_mapping_keys
 
 ## Быстрый запуск
 
-### Требования
+### 0. Требования
 
-Docker Compose v2, GNU Make, [uv](https://docs.astral.sh/uv/), около 4 ГБ ОЗУ. Основному demo нужен ключ OpenRouter с доступом к указанной модели.
+Нужны Git, Docker Desktop/Engine с Docker Compose v2, GNU Make и [uv](https://docs.astral.sh/uv/). На Windows запускайте команды ниже из **Git Bash** или WSL: `Makefile` использует POSIX shell. Docker Desktop должен быть запущен.
 
-### OpenRouter по умолчанию
+Проверка окружения:
 
 ```bash
-cp .env.example .env
-# Заполните все placeholders; SANITIZER_HMAC_KEY — случайный приватный ключ >= 32 байт.
-make demo
+docker compose version
+make --version
+uv --version
 ```
 
-`make demo` заново создаёт синтетические PostgreSQL volumes и записывает `.runs/demo/`:
+Для OpenRouter demo нужен ключ с доступом к `deepseek/deepseek-v4-flash`; его можно создать в [OpenRouter Keys](https://openrouter.ai/keys). Для локального Ollama ключ OpenRouter не нужен. Выделите не менее 4 ГБ ОЗУ; первый Docker build и загрузка модели Ollama требуют дополнительного места и доступа к сети.
+
+### 1. Клонирование и настройка `.env`
+
+```bash
+git clone https://github.com/CrazyAngelm/db-sanitizer.git
+cd db-sanitizer
+cp .env.example .env
+uv run python -c "import secrets; print(secrets.token_urlsafe(48))"
+```
+
+Вставьте напечатанное значение в `SANITIZER_HMAC_KEY=` в `.env`. Для основного demo также замените `OPENROUTER_API_KEY=replace-with-your-openrouter-api-key` на свой ключ. Остальные значения из `.env.example` подходят для встроенной синтетической базы и менять их не нужно.
+
+В PowerShell вместо `cp` можно использовать `Copy-Item .env.example .env`. Не коммитьте `.env`.
+
+### 2. Выберите сценарий
+
+| Что проверить | Команда | Нужен ключ OpenRouter |
+|---|---|---|
+| Быстрые unit/security тесты | `make test` | Нет; Docker и `.env` тоже не нужны |
+| Полная Docker integration-проверка | `make test-all` | Нет; нужен заполненный `.env` с HMAC-ключом |
+| Основной реальный demo | `make demo` | Да |
+| Полностью локальный demo | `make demo-ollama` | Нет |
+
+`make test` не вызывает LLM и не запускает контейнеры. При первом запуске `uv` может скачать зависимости, поэтому для него всё же нужен доступ к package registry.
+
+### 3. Основной demo с OpenRouter
+
+```bash
+make demo
+cat .runs/demo/report.md
+```
+
+Команда поднимает две синтетические PostgreSQL базы, генерирует замены через OpenRouter и завершает работу только после обязательной верификации. Она отправляет запросы к внешнему provider и может расходовать баланс OpenRouter. Успешный отчёт содержит `Status: **passed**` и все проверки со статусом `pass`.
+
+> `make demo` сначала выполняет `make clean`: удаляет только локальные Docker volumes этого Compose-проекта и `.runs/`. Не используйте default policy/Makefile как команду для production-базы.
+
+Артефакты запуска находятся в `.runs/demo/`:
 
 ```text
 state.sqlite3  mappings.sqlite3  greenmask.generated.yaml  mapper-config.json
 dump/  logs.jsonl  report.json  report.md  demo-before-after.md
 ```
 
-`demo-before-after.md` возможен только для синтетической demo-базы.
+`demo-before-after.md` создаётся только для синтетической demo-базы.
 
-### Необязательный Ollama
+### 4. Локальный demo с Ollama
 
 ```bash
 make demo-ollama
+cat .runs/demo-ollama/report.md
 ```
 
-Команда запускает профиль `ollama`, однократно загружает `qwen3:4b` и применяет `config/policy.ollama.yaml`. Для другой модели измените `model` в этой policy и передайте одинаковое имя в `make demo-ollama OLLAMA_MODEL=…`. Обычный `make demo` не поднимает Ollama.
+Команда запускает optional Compose-профиль `ollama`, однократно загружает `qwen3:4b` и применяет `config/policy.ollama.yaml`. Первая загрузка модели может занять время. Для другой модели измените `model` в этой policy и передайте то же имя в `make demo-ollama OLLAMA_MODEL=…`. Обычный `make demo` Ollama не поднимает.
 
-### CLI
+### 5. Повторная верификация и resume
+
+После `make demo` базы остаются запущенными. Следующие команды выполняют CLI **в контейнере** (host-команда `db-sanitizer` не увидит Docker hostname `source-db` без отдельной настройки DSN):
 
 ```bash
-db-sanitizer run --policy config/policy.demo.yaml --run-id demo
-db-sanitizer run --policy config/policy.demo.yaml --run-id demo --resume
-db-sanitizer verify --policy config/policy.demo.yaml --run-id demo
+# Повторить verifier и перезаписать безопасные report.json/report.md без вызова LLM.
+docker compose --env-file .env run --rm --no-deps sanitizer \
+  verify --policy config/policy.demo.yaml --run-id demo
+
+# Продолжить только прерванный, ещё не завершённый запуск.
+docker compose --env-file .env run --rm --no-deps sanitizer \
+  run --policy config/policy.demo.yaml --run-id demo --resume
 ```
 
-`--resume` проверяет хеш policy, отпечаток схемы, provider/model и HMAC fingerprint. `verify` не вызывает LLM и может запускаться без provider credentials.
+`--resume` проверяет policy hash, schema fingerprint, provider/model и HMAC fingerprint. Для уже завершённого запуска используйте `verify`, а не `--resume`.
+
+### Если что-то пошло не так
+
+| Симптом | Действие |
+|---|---|
+| Ошибка про `SANITIZER_HMAC_KEY` | Сгенерируйте и вставьте непустой случайный ключ длиной не менее 32 байт. |
+| Ошибка про `OPENROUTER_API_KEY` | Укажите действующий ключ или используйте `make demo-ollama` / `make test-all`. |
+| Docker daemon недоступен | Запустите Docker Desktop и повторите команду. |
+| Нужно начать с нуля | Выполните `make clean`, затем выбранную команду снова. |
+| Нужны детали failed run | Откройте `.runs/<run-id>/report.md` и `.runs/<run-id>/logs.jsonl`; они не содержат raw PII. |
 
 ## Policy, registry и privacy
 
